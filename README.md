@@ -1,56 +1,51 @@
-# Welcome to your Expo app 👋
+# MNTL app
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+The MNTL mobile app (iOS and Android first, web later), built with Expo SDK 57, Expo Router and
+Tailwind via [Uniwind](https://docs.uniwind.dev). Screens follow the "MNTL App Draft" Figma file.
+There is no backend yet: all data comes from an in-memory mock that implements the same contract
+the real API will.
 
-## Get started
-
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Run it
 
 ```bash
-npm run reset-project
+npm install
+npm run dev          # expo start; open in Expo Go, a simulator or the browser
+npm run typecheck
+npm run lint
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+After changing `metro.config.js`, `src/global.css` tokens or fonts, restart with `npx expo start --clear`.
 
-### Other setup steps
+## Layout
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+```text
+src/
+  app/                 Routes only (Expo Router). Each file re-exports a screen from features/.
+  features/<name>/     One folder per product area: screen, components, and data hooks (api.ts).
+  components/ui/       Design system: Text, Button, Chip, Toggle, SliderRow, SettingRow, ...
+  components/navigation/  Custom tab bar.
+  api/                 Data contract: domain types, ApiClient interface, mock implementation.
+  i18n/                All user-facing copy (English for now).
+  lib/                 Small helpers (class merging, formatting, query client, optimistic updates).
+  theme/               Fonts and colour access for non-className APIs.
+  global.css           Design tokens (colours, fonts) mirrored from Figma variables.
+```
 
-## Learn more
+## Conventions
 
-To learn more about developing your project with Expo, look at the following resources:
+- **Styling**: Tailwind classes via `className`, using the tokens in `src/global.css`
+  (`bg-card`, `text-muted`, `font-display`, ...). No hard-coded colours. Components take `variant`/`tone`
+  props for their look and `className` for layout; `cn()` lets a caller's classes win.
+- **Text**: always `<Text variant=... tone=...>` from `@/components/ui`, which carries the Figma type scale.
+- **Data**: screens never call `api` directly. Each feature exposes TanStack Query hooks in its
+  `api.ts`; settings use optimistic updates (`useOptimisticPatch`). Cache keys live in `src/api/query-keys.ts`.
+- **Copy**: strings live in `src/i18n/en.ts`, read with `useCopy()`.
+- **Accessibility**: interactive components set `role` and `aria-*` props, which work on iOS, Android and web.
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+## Connecting the backend
 
-## Join the community
+1. Keep `src/api/types.ts` and `src/api/client.ts` in sync with the API (they are the contract).
+2. Implement `ApiClient` over HTTP and return it from `src/api/index.ts` instead of `createMockClient()`.
+3. Add auth as another `Stack.Protected` guard in `src/app/_layout.tsx`, next to onboarding.
 
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+Nothing in `features/` or `components/` needs to change.

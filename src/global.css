@@ -1,9 +1,27 @@
-:root {
-  --font-display:
-    Spline Sans, Inter, ui-sans-serif, system-ui, sans-serif, Apple Color Emoji, Segoe UI Emoji,
-    Segoe UI Symbol, Noto Color Emoji;
-  --font-mono:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace;
-  --font-rounded: 'SF Pro Rounded', 'Hiragino Maru Gothic ProN', Meiryo, 'MS PGothic', sans-serif;
-  --font-serif: Georgia, 'Times New Roman', serif;
+@import 'tailwindcss';
+@import 'uniwind';
+
+/*
+ * MNTL design tokens. Values mirror the variables in the "MNTL App Draft" Figma file;
+ * the Figma name is noted next to each one. Components use these through utilities
+ * (`bg-card`, `text-muted`, `font-display`, ...) and never hard-code colours.
+ *
+ * Only a light theme is designed so far. When a dark theme lands, move the colours into
+ * `@layer theme { :root { @variant light { ... } @variant dark { ... } } }`.
+ */
+@theme {
+  --color-canvas: #f6f2ec; /* bg/base */
+  --color-card: #fffcf7; /* bg/card */
+  --color-line: #e2dacd; /* line/default */
+  --color-ink: #1b1916; /* ink/primary */
+  --color-muted: #6e675e; /* ink/muted */
+  --color-on-dark: #f6f2ec; /* ink/on-dark */
+  --color-cobalt: #113692; /* accent/cobalt */
+  --color-cobalt-soft: #dde3f2; /* accent/cobalt-soft */
+  --color-sand: #f1e3d3; /* end stop of the media placeholder gradient */
+
+  /* Family names are the keys passed to `useFonts` in src/theme/fonts.ts. */
+  --font-display: 'Kanit_900Black';
+  --font-wordmark: 'Kanit_900Black_Italic'; /* Figma: "Wordmark (Atavian placeholder)" */
+  --font-body: 'InstrumentSans_500Medium';
 }
