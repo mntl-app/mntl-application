@@ -1,0 +1,1173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MNTL Migration Tool</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 600px;
+            width: 100%;
+            padding: 40px;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .upload-area {
+            border: 3px dashed #667eea;
+            border-radius: 15px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: #f8f9ff;
+        }
+
+        .upload-area:hover {
+            border-color: #764ba2;
+            background: #f0f2ff;
+        }
+
+        .upload-area.dragover {
+            border-color: #764ba2;
+            background: #e8ebff;
+        }
+
+        .upload-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+
+        .upload-text {
+            color: #666;
+            font-size: 16px;
+            margin-bottom: 10px;
+        }
+
+        .upload-hint {
+            color: #999;
+            font-size: 12px;
+        }
+
+        #fileInput {
+            display: none;
+        }
+
+        .file-info {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f0f2ff;
+            border-radius: 10px;
+            display: none;
+        }
+
+        .file-info.show {
+            display: block;
+        }
+
+        .file-name {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 5px;
+        }
+
+        .file-size {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 20px;
+            transition: transform 0.2s ease;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .progress-section {
+            margin-top: 30px;
+            display: none;
+        }
+
+        .progress-section.show {
+            display: block;
+        }
+
+        .job-info {
+            background: #f8f9ff;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 15px;
+        }
+
+        .job-info-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .job-info-label {
+            color: #666;
+            font-weight: 500;
+        }
+
+        .job-info-value {
+            color: #333;
+            font-weight: 600;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: #e0e0e0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-top: 15px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 5px 12px;
+            border-radius: 15px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .status-pending {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status-processing {
+            background: #cce5ff;
+            color: #004085;
+        }
+
+        .status-completed {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-failed {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .error-message {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 20px;
+            display: none;
+        }
+
+        .error-message.show {
+            display: block;
+        }
+
+        .platform-badge {
+            display: inline-block;
+            padding: 5px 12px;
+            border-radius: 15px;
+            font-size: 12px;
+            font-weight: 600;
+            background: #667eea;
+            color: white;
+            margin-top: 10px;
+        }
+
+        .success-message {
+            background: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 20px;
+            display: none;
+        }
+
+        .success-message.show {
+            display: block;
+        }
+
+        .results-section {
+            margin-top: 30px;
+            display: none;
+        }
+
+        .results-section.show {
+            display: block;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .tab-btn {
+            flex: 1;
+            min-width: 80px;
+            padding: 10px 15px;
+            border: none;
+            background: #f0f2ff;
+            color: #666;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }
+
+        .tab-btn:hover {
+            background: #e0e2ff;
+        }
+
+        .tab-btn.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 15px;
+        }
+
+        .summary-card {
+            background: #f8f9ff;
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+        }
+
+        .summary-icon {
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+
+        .summary-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+
+        .summary-label {
+            font-size: 12px;
+            color: #666;
+            font-weight: 500;
+        }
+
+        .data-list {
+            max-height: 400px;
+            overflow-y: auto;
+            background: #f8f9ff;
+            border-radius: 12px;
+            padding: 15px;
+        }
+
+        .selection-toolbar {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .selection-toolbar input[type="search"] {
+            flex: 1;
+            min-width: 120px;
+            padding: 10px 12px;
+            border: 1px solid #d8daf0;
+            border-radius: 8px;
+            font: inherit;
+        }
+
+        .selection-action {
+            padding: 9px 12px;
+            border: 0;
+            border-radius: 8px;
+            background: #f0f2ff;
+            color: #5141a0;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .selection-checkbox {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+        }
+
+        .selection-checkbox input {
+            margin-top: 3px;
+            accent-color: #667eea;
+        }
+
+        .wizard-page[hidden],
+        .summary-panel[hidden] {
+            display: none !important;
+        }
+
+        .wizard-heading {
+            margin-bottom: 18px;
+        }
+
+        .wizard-heading h2,
+        .comparison-heading h2 {
+            color: #333;
+            margin-bottom: 6px;
+        }
+
+        .wizard-progress {
+            color: #667eea;
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .wizard-navigation {
+            display: flex;
+            gap: 10px;
+            margin-top: 16px;
+        }
+
+        .wizard-navigation .btn {
+            margin-top: 0;
+        }
+
+        .wizard-navigation .btn-secondary {
+            background: #f0f2ff;
+            color: #5141a0;
+        }
+
+        .summary-tabs {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin: 16px 0;
+        }
+
+        .summary-tab {
+            padding: 10px 12px;
+            border: 0;
+            border-radius: 8px;
+            background: #f0f2ff;
+            color: #5141a0;
+            cursor: pointer;
+            font: inherit;
+        }
+
+        .summary-tab.active {
+            background: #667eea;
+            color: white;
+        }
+
+        .migration-notice {
+            color: #725c22;
+            background: #fff8df;
+            border-radius: 8px;
+            padding: 12px;
+            font-size: 13px;
+            margin-bottom: 16px;
+        }
+
+        .summary-panel h3 {
+            margin: 0 0 12px;
+            color: #333;
+        }
+
+        .selection-content {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .selectable-row[hidden] {
+            display: none;
+        }
+
+        .data-item {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            border-left: 4px solid #667eea;
+        }
+
+        .data-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .data-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .data-item-platform {
+            font-size: 12px;
+            font-weight: 600;
+            color: #667eea;
+            text-transform: uppercase;
+        }
+
+        .data-item-date {
+            font-size: 12px;
+            color: #999;
+        }
+
+        .data-item-content {
+            color: #333;
+            font-size: 14px;
+            margin-bottom: 8px;
+            word-break: break-word;
+        }
+
+        .post-media {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 10px;
+            margin: 12px 0;
+        }
+
+        .post-media img,
+        .post-media video {
+            display: block;
+            width: 100%;
+            max-height: 360px;
+            object-fit: contain;
+            border-radius: 8px;
+            background: #111;
+        }
+
+        .data-item-metrics {
+            display: flex;
+            gap: 15px;
+            font-size: 12px;
+            color: #666;
+        }
+
+        .data-item-metric {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .no-data {
+            text-align: center;
+            color: #999;
+            padding: 40px;
+            font-size: 14px;
+        }
+
+        [hidden] {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 MNTL Migration Tool</h1>
+        <p class="subtitle">Import social media archives from Instagram, Facebook, X, and TikTok</p>
+
+        <div class="upload-area" id="uploadArea">
+            <div class="upload-icon">📁</div>
+            <div class="upload-text">Drop your ZIP archive here or click to browse</div>
+            <div class="upload-hint">Supported: Instagram, Facebook, X, TikTok archives</div>
+            <input type="file" id="fileInput" accept=".zip">
+        </div>
+
+        <div class="file-info" id="fileInfo">
+            <div class="file-name" id="fileName"></div>
+            <div class="file-size" id="fileSize"></div>
+        </div>
+
+        <button class="btn" id="uploadBtn" disabled>Upload & Process</button>
+
+        <div class="progress-section" id="progressSection">
+            <div class="job-info">
+                <div class="job-info-item">
+                    <span class="job-info-label">Platform:</span>
+                    <span class="job-info-value" id="platformValue">-</span>
+                </div>
+                <div class="job-info-item">
+                    <span class="job-info-label">Status:</span>
+                    <span class="job-info-value" id="statusValue">-</span>
+                </div>
+                <div class="job-info-item">
+                    <span class="job-info-label">Job ID:</span>
+                    <span class="job-info-value" id="jobIdValue">-</span>
+                </div>
+                <div class="job-info-item">
+                    <span class="job-info-label">Posts:</span>
+                    <span class="job-info-value" id="postsValue">0 / 0</span>
+                </div>
+            </div>
+
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <div style="text-align: center; margin-top: 10px; color: #666; font-size: 14px;">
+                <span id="progressText">0%</span>
+            </div>
+        </div>
+
+        <div class="error-message" id="errorMessage"></div>
+        <div class="success-message" id="successMessage"></div>
+
+        <div class="results-section" id="resultsSection">
+            <section class="wizard-page" id="postsStep">
+                <div class="wizard-heading">
+                    <div class="wizard-progress">Step 1 of 3</div>
+                    <h2>Choose posts to migrate</h2>
+                    <p class="subtitle">Review each post and its caption. All posts are included by default.</p>
+                </div>
+                <div class="selection-toolbar">
+                    <button class="selection-action" data-select-kind="posts" data-select-all="true">Select all</button>
+                    <button class="selection-action" data-select-kind="posts" data-select-all="false">Clear all</button>
+                </div>
+                <div class="data-list" id="postsList"></div>
+                <div class="wizard-navigation">
+                    <button class="btn" data-wizard-next="followers">Next: followers</button>
+                </div>
+            </section>
+
+            <section class="wizard-page" id="followersStep" hidden>
+                <div class="wizard-heading">
+                    <div class="wizard-progress">Step 2 of 3</div>
+                    <h2>Choose your followers</h2>
+                    <p class="subtitle">Search and select the people who followed you on Instagram. All are included by default.</p>
+                </div>
+                <div class="selection-toolbar">
+                    <input type="search" id="followersSearch" placeholder="Search followers" aria-label="Search followers">
+                    <button class="selection-action" data-select-kind="followers" data-select-all="true">Select all</button>
+                    <button class="selection-action" data-select-kind="followers" data-select-all="false">Clear all</button>
+                </div>
+                <div class="data-list" id="followersList"></div>
+                <div class="wizard-navigation">
+                    <button class="btn btn-secondary" data-wizard-back="posts">Back: posts</button>
+                    <button class="btn" data-wizard-next="following">Next: following</button>
+                </div>
+            </section>
+
+            <section class="wizard-page" id="followingStep" hidden>
+                <div class="wizard-heading">
+                    <div class="wizard-progress">Step 3 of 3</div>
+                    <h2>Choose accounts you follow</h2>
+                    <p class="subtitle">Search and select the accounts you followed on Instagram. All are included by default.</p>
+                </div>
+                <div class="selection-toolbar">
+                    <input type="search" id="followingSearch" placeholder="Search following" aria-label="Search following">
+                    <button class="selection-action" data-select-kind="following" data-select-all="true">Select all</button>
+                    <button class="selection-action" data-select-kind="following" data-select-all="false">Clear all</button>
+                </div>
+                <div class="data-list" id="followingList"></div>
+                <div class="wizard-navigation">
+                    <button class="btn btn-secondary" data-wizard-back="followers">Back: followers</button>
+                    <button class="btn" id="finishWizardBtn">Finish and see matches</button>
+                </div>
+            </section>
+
+            <section class="wizard-page" id="summaryStep" hidden>
+                <div class="comparison-heading">
+                    <div class="wizard-progress">Your migration summary</div>
+                    <h2>Matches from saved archives</h2>
+                    <p class="subtitle">Unmatched followers, following, posts, and likes remain in your archive for future comparisons.</p>
+                </div>
+                <div class="migration-notice">These are identified matches only. This app does not connect to MNTL or automatically apply follows or transfer likes.</div>
+                <div class="summary-tabs">
+                    <button class="summary-tab active" data-summary-tab="followingMatches">People you followed</button>
+                    <button class="summary-tab" data-summary-tab="followerMatches">People who followed you</button>
+                    <button class="summary-tab" data-summary-tab="likeMatches">Likes on your posts</button>
+                </div>
+                <section class="summary-panel" id="followingMatches">
+                    <h3>These people you followed on Instagram have matching saved archives</h3>
+                    <div class="data-list" id="followingMatchesList"></div>
+                </section>
+                <section class="summary-panel" id="followerMatches" hidden>
+                    <h3>These people who followed you on Instagram have matching saved archives</h3>
+                    <div class="data-list" id="followerMatchesList"></div>
+                </section>
+                <section class="summary-panel" id="likeMatches" hidden>
+                    <h3>These posts were liked by matched people who followed you on Instagram</h3>
+                    <div class="data-list" id="likeMatchesList"></div>
+                </section>
+                <div class="wizard-navigation">
+                    <button class="btn btn-secondary" id="summaryBackBtn">Back: following</button>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <script>
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const fileInfo = document.getElementById('fileInfo');
+        const fileName = document.getElementById('fileName');
+        const fileSize = document.getElementById('fileSize');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const progressSection = document.getElementById('progressSection');
+        const progressFill = document.getElementById('progressFill');
+        const progressText = document.getElementById('progressText');
+        const errorMessage = document.getElementById('errorMessage');
+        const successMessage = document.getElementById('successMessage');
+        const platformValue = document.getElementById('platformValue');
+        const statusValue = document.getElementById('statusValue');
+        const jobIdValue = document.getElementById('jobIdValue');
+        const postsValue = document.getElementById('postsValue');
+
+        let selectedFile = null;
+        let currentJobId = null;
+        let currentArchiveId = null;
+        let progressInterval = null;
+        let currentSelection = null;
+        let selectionCatalog = { postIds: [], followers: [], following: [] };
+        let selectionSavePromise = Promise.resolve();
+
+        uploadArea.addEventListener('click', () => fileInput.click());
+
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFileSelect(files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFileSelect(e.target.files[0]);
+            }
+        });
+
+        function handleFileSelect(file) {
+            if (!file.name.endsWith('.zip')) {
+                showError('Please select a ZIP file');
+                return;
+            }
+
+            selectedFile = file;
+            fileName.textContent = file.name;
+            fileSize.textContent = formatFileSize(file.size);
+            fileInfo.classList.add('show');
+            uploadBtn.disabled = false;
+            hideError();
+            hideSuccess();
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+
+        uploadBtn.addEventListener('click', async () => {
+            if (!selectedFile) return;
+
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = 'Uploading...';
+
+            const formData = new FormData();
+            formData.append('archive', selectedFile);
+            formData.append('userId', 'web-user');
+
+            try {
+                const response = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'Upload failed');
+                }
+
+                currentJobId = data.jobId;
+                currentArchiveId = data.archiveId;
+                currentSelection = null;
+                selectionCatalog = { postIds: [], followers: [], following: [] };
+                Object.keys(loadedTabData).forEach(tab => delete loadedTabData[tab]);
+                selectionSavePromise = Promise.resolve();
+                platformValue.textContent = data.platform;
+                jobIdValue.textContent = data.jobId;
+                statusValue.innerHTML = '<span class="status-badge status-pending">Pending</span>';
+                progressSection.classList.add('show');
+                uploadBtn.textContent = 'Processing...';
+
+                startProgressTracking();
+            } catch (error) {
+                showError(error.message);
+                uploadBtn.disabled = false;
+                uploadBtn.textContent = 'Upload & Process';
+            }
+        });
+
+        function startProgressTracking() {
+            if (progressInterval) {
+                clearInterval(progressInterval);
+            }
+
+            progressInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/api/jobs/${currentJobId}`);
+                    const data = await response.json();
+
+                    if (!response.ok) {
+                        throw new Error(data.error || 'Failed to get job status');
+                    }
+
+                    updateProgress(data);
+
+                    if (data.status === 'completed' || data.status === 'failed') {
+                        clearInterval(progressInterval);
+                        uploadBtn.disabled = false;
+                        uploadBtn.textContent = 'Upload & Process';
+
+                        if (data.status === 'completed') {
+                            showSuccess('Migration completed successfully!');
+                            progressSection.classList.remove('show');
+                            document.getElementById('resultsSection').classList.add('show');
+                            currentSelection = null;
+                            selectionCatalog = { postIds: [], followers: [], following: [] };
+                            Object.keys(loadedTabData).forEach(tab => delete loadedTabData[tab]);
+                            selectionSavePromise = Promise.resolve();
+                            goToWizardStep('postsStep').catch(error => showError(error.message));
+                        } else {
+                            showError(data.error || 'Migration failed');
+                        }
+                    }
+                } catch (error) {
+                    clearInterval(progressInterval);
+                    showError(error.message);
+                    uploadBtn.disabled = false;
+                    uploadBtn.textContent = 'Upload & Process';
+                }
+            }, 1000);
+        }
+
+        function updateProgress(data) {
+            const progress = data.progress || 0;
+            progressFill.style.width = `${progress}%`;
+            progressText.textContent = `${Math.round(progress)}%`;
+
+            const statusClass = `status-${data.status}`;
+            statusValue.innerHTML = `<span class="status-badge ${statusClass}">${data.status}</span>`;
+
+            postsValue.textContent = `${data.processedPosts} / ${data.totalPosts}`;
+        }
+
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.classList.add('show');
+        }
+
+        function hideError() {
+            errorMessage.classList.remove('show');
+        }
+
+        function showSuccess(message) {
+            successMessage.textContent = message;
+            successMessage.classList.add('show');
+        }
+
+        function hideSuccess() {
+            successMessage.classList.remove('show');
+        }
+
+        const loadedTabData = {};
+        const wizardDataTabs = {
+            postsStep: 'posts',
+            followersStep: 'followers',
+            followingStep: 'following',
+        };
+
+        async function goToWizardStep(stepId) {
+            document.querySelectorAll('.wizard-page').forEach(page => {
+                page.hidden = page.id !== stepId;
+            });
+            const tab = wizardDataTabs[stepId];
+            if (tab) await loadTabData(tab);
+            document.getElementById('resultsSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        document.querySelectorAll('[data-wizard-next]').forEach(button => {
+            button.addEventListener('click', async () => {
+                button.disabled = true;
+                try {
+                    await queueSelectionSave();
+                    await goToWizardStep(`${button.dataset.wizardNext}Step`);
+                } catch (error) {
+                    showError(error.message);
+                } finally {
+                    button.disabled = false;
+                }
+            });
+        });
+
+        document.querySelectorAll('[data-wizard-back]').forEach(button => {
+            button.addEventListener('click', async () => {
+                try {
+                    await queueSelectionSave();
+                    await goToWizardStep(`${button.dataset.wizardBack}Step`);
+                } catch (error) {
+                    showError(error.message);
+                }
+            });
+        });
+
+        document.getElementById('finishWizardBtn').addEventListener('click', async event => {
+            const button = event.currentTarget;
+            button.disabled = true;
+            button.textContent = 'Saving selections and finding matches...';
+            try {
+                await queueSelectionSave();
+                const response = await fetch('/api/compare', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ archiveId: currentArchiveId }),
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Comparison failed');
+                renderMigrationSummary(data.comparisons);
+                await goToWizardStep('summaryStep');
+            } catch (error) {
+                showError(error.message);
+            } finally {
+                button.disabled = false;
+                button.textContent = 'Finish and see matches';
+            }
+        });
+
+        document.getElementById('summaryBackBtn').addEventListener('click', () => goToWizardStep('followingStep'));
+
+        document.querySelectorAll('[data-summary-tab]').forEach(button => {
+            button.addEventListener('click', () => {
+                document.querySelectorAll('.summary-tab').forEach(tab => tab.classList.remove('active'));
+                document.querySelectorAll('.summary-panel').forEach(panel => {
+                    panel.hidden = panel.id !== button.dataset.summaryTab;
+                });
+                button.classList.add('active');
+            });
+        });
+
+        async function loadTabData(tab) {
+            const archiveScope = currentArchiveId
+                ? `?archiveId=${encodeURIComponent(currentArchiveId)}`
+                : '';
+            const response = await fetch(`/api/data/${tab}${archiveScope}`);
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.error || `Failed to load ${tab}`);
+            }
+
+            if (!currentSelection && data.selection) {
+                currentSelection = {
+                    postIds: [...data.selection.postIds],
+                    followers: [...data.selection.followers],
+                    following: [...data.selection.following],
+                };
+            }
+            renderTabData(tab, data);
+        }
+
+        function renderTabData(tab, data) {
+            const listElement = document.getElementById(`${tab}List`);
+            if (!listElement) return;
+            loadedTabData[tab] = data;
+
+            if (tab === 'posts') {
+                selectionCatalog.postIds = data.posts.map(post => post.originalPlatformId);
+            } else if (tab === 'followers' || tab === 'following') {
+                const key = tab === 'followers' ? 'followerId' : 'followingId';
+                selectionCatalog[tab] = data.followRelations.map(relation => relation[key]);
+            }
+
+            if (data.count === 0) {
+                listElement.innerHTML = '<div class="no-data">No data available</div>';
+                return;
+            }
+
+            const items = tab === 'followers' || tab === 'following' ? data.followRelations :
+                          tab === 'posts' ? data.posts :
+                          data.likes;
+
+            listElement.innerHTML = items.map(item => renderItem(tab, item)).join('');
+            filterSelectionRows(tab);
+        }
+
+        function renderItem(tab, item) {
+            switch (tab) {
+                case 'posts':
+                    return renderSelectionRow('posts', item.originalPlatformId, item.content || '', `
+                        <div class="data-item">
+                            <div class="data-item-header">
+                                <span class="data-item-platform">${escapeHtml(item.platform)}</span>
+                                <span class="data-item-date">${new Date(item.createdAt).toLocaleDateString()}</span>
+                            </div>
+                            <div class="data-item-metrics">
+                                <span class="data-item-metric">Post ID: ${escapeHtml(item.originalPlatformId)}</span>
+                            </div>
+                            <div class="data-item-content">${escapeHtml(item.content || '(No caption)')}</div>
+                            ${renderPostMedia(item)}
+                        </div>
+                    `);
+                case 'followers':
+                    return renderSelectionRow('followers', item.followerId, item.followerId, `
+                        <div class="data-item">
+                            <div class="data-item-header">
+                                <span class="data-item-platform">${escapeHtml(item.platform)}</span>
+                                <span class="data-item-date">${item.followedAt ? new Date(item.followedAt).toLocaleDateString() : 'Unknown date'}</span>
+                            </div>
+                            <div class="data-item-content">
+                                <strong>${escapeHtml(item.followerId)}</strong> follows you
+                            </div>
+                        </div>
+                    `);
+                case 'following':
+                    return renderSelectionRow('following', item.followingId, item.followingId, `
+                        <div class="data-item">
+                            <div class="data-item-header">
+                                <span class="data-item-platform">${escapeHtml(item.platform)}</span>
+                                <span class="data-item-date">${item.followedAt ? new Date(item.followedAt).toLocaleDateString() : 'Unknown date'}</span>
+                            </div>
+                            <div class="data-item-content">
+                                You follow <strong>${escapeHtml(item.followingId)}</strong>
+                            </div>
+                        </div>
+                    `);
+                case 'likes':
+                    return `
+                        <div class="data-item">
+                            <div class="data-item-header">
+                                <span class="data-item-platform">${item.platform}</span>
+                                <span class="data-item-date">${item.likedAt ? new Date(item.likedAt).toLocaleDateString() : 'Unknown date'}</span>
+                            </div>
+                            <div class="data-item-content">
+                                <strong>${escapeHtml(item.userId)}</strong> liked post FBID <strong>${escapeHtml(item.postId)}</strong>
+                            </div>
+                            ${item.postShortcode ? `<div class="data-item-content">Instagram shortcode: ${escapeHtml(item.postShortcode)}</div>` : ''}
+                            <div class="data-item-content">
+                                ${item.matchedPost
+                                    ? `Matched ${item.matchType === 'id' ? 'by post ID' : 'by unique caption'}: <strong>${escapeHtml(item.matchedPost.originalPlatformId)}</strong>`
+                                    : 'Waiting for a matching post archive'}
+                            </div>
+                        </div>
+                    `;
+                default:
+                    return '';
+            }
+        }
+
+        function selectionKey(kind) {
+            return kind === 'posts' ? 'postIds' : kind;
+        }
+
+        function renderSelectionRow(kind, value, searchableText, content) {
+            const key = selectionKey(kind);
+            const selected = currentSelection?.[key]?.includes(value) ?? true;
+            return `
+                <div class="selectable-row" data-search-value="${escapeHtml(searchableText).toLowerCase()}">
+                    <label class="selection-checkbox">
+                        <input type="checkbox" data-selection-kind="${kind}"
+                            data-selection-value="${encodeURIComponent(value)}" ${selected ? 'checked' : ''}>
+                        <span class="selection-content">${content}</span>
+                    </label>
+                </div>
+            `;
+        }
+
+        async function queueSelectionSave() {
+            if (!currentArchiveId || !currentSelection) return;
+            const selection = {
+                postIds: [...currentSelection.postIds],
+                followers: [...currentSelection.followers],
+                following: [...currentSelection.following],
+            };
+            selectionSavePromise = selectionSavePromise.catch(() => {}).then(async () => {
+                const response = await fetch(`/api/archives/${encodeURIComponent(currentArchiveId)}/selection`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(selection),
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Failed to save selection');
+            });
+            selectionSavePromise.catch(error => showError(error.message));
+            return selectionSavePromise;
+        }
+
+        document.getElementById('resultsSection').addEventListener('change', event => {
+            const checkbox = event.target.closest('input[data-selection-kind]');
+            if (!checkbox || !currentSelection) return;
+            const kind = checkbox.dataset.selectionKind;
+            const key = selectionKey(kind);
+            const value = decodeURIComponent(checkbox.dataset.selectionValue);
+            const selected = new Set(currentSelection[key]);
+            if (checkbox.checked) selected.add(value);
+            else selected.delete(value);
+            currentSelection[key] = [...selected];
+            queueSelectionSave();
+        });
+
+        document.querySelectorAll('[data-select-all]').forEach(button => {
+            button.addEventListener('click', () => {
+                const kind = button.dataset.selectKind;
+                const key = selectionKey(kind);
+                if (!currentSelection || !loadedTabData[kind]) return;
+                currentSelection[key] = button.dataset.selectAll === 'true'
+                    ? [...selectionCatalog[key]]
+                    : [];
+                renderTabData(kind, loadedTabData[kind]);
+                queueSelectionSave();
+            });
+        });
+
+        ['followers', 'following'].forEach(tab => {
+            document.getElementById(`${tab}Search`).addEventListener('input', () => filterSelectionRows(tab));
+        });
+
+        function filterSelectionRows(tab) {
+            const listElement = document.getElementById(`${tab}List`);
+            const searchInput = document.getElementById(`${tab}Search`);
+            if (!listElement || !searchInput) return;
+            const query = searchInput.value.trim().toLowerCase();
+            listElement.querySelectorAll('.selectable-row').forEach(row => {
+                row.hidden = !row.dataset.searchValue.includes(query);
+            });
+        }
+
+        function escapeHtml(value) {
+            return String(value).replace(/[&<>"']/g, character => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;'
+            })[character]);
+        }
+
+        function renderPostMedia(post) {
+            if (!Array.isArray(post.mediaUrls) || post.mediaUrls.length === 0) return '';
+
+            return `<div class="post-media">${post.mediaUrls.map((url, index) => {
+                const safeUrl = escapeHtml(url);
+                const type = post.mediaTypes?.[index] ||
+                    (/\.(mp4|mov|webm)(?:$|\?)/i.test(url) ? 'video' : 'image');
+                return type === 'video'
+                    ? `<video controls preload="metadata" src="${safeUrl}"></video>`
+                    : `<img loading="lazy" src="${safeUrl}" alt="Post media">`;
+            }).join('')}</div>`;
+        }
+
+        function renderMigrationSummary(comparisons) {
+            const matchingFollowing = comparisons.filter(comparison => comparison.youFollowThem);
+            const matchingFollowers = comparisons.filter(comparison => comparison.theyFollowYou);
+            const matchingLikes = comparisons.flatMap(comparison =>
+                comparison.theyFollowYou
+                    ? comparison.theyLikeYourPosts.map(like => ({ ...like, liker: comparison.ownerId }))
+                    : []
+            );
+            document.getElementById('followingMatchesList').innerHTML = renderAccountMatches(matchingFollowing);
+            document.getElementById('followerMatchesList').innerHTML = renderAccountMatches(matchingFollowers);
+            document.getElementById('likeMatchesList').innerHTML = matchingLikes.length
+                ? matchingLikes.map(like => `
+                    <article class="data-item">
+                        <div class="data-item-content"><strong>@${escapeHtml(like.liker)}</strong> liked your post</div>
+                        <div class="data-item-content">${escapeHtml(like.postCaption || `Post ID: ${like.postId}`)}</div>
+                        ${renderPostMedia(like)}
+                        <div class="data-item-date">Matched by ${escapeHtml(like.matchType)}</div>
+                    </article>
+                `).join('')
+                : '<div class="no-data">No selected posts have likes matched to a saved account that followed you. The archive data remains stored for future comparisons.</div>';
+        }
+
+        function renderAccountMatches(comparisons) {
+            return comparisons.length
+                ? comparisons.map(comparison => `
+                    <article class="data-item">
+                        <div class="data-item-content"><strong>@${escapeHtml(comparison.ownerId)}</strong> — matching uploaded archive found.</div>
+                    </article>
+                `).join('')
+                : '<div class="no-data">No matches found yet. The original archive data remains stored and can be compared when more accounts join.</div>';
+        }
+    </script>
+</body>
+</html>

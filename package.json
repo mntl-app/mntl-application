@@ -1,0 +1,35 @@
+{
+  "name": "mntl-migration",
+  "version": "1.0.0",
+  "description": "Unified data migration tool for social media archives (Instagram, Facebook, X, TikTok)",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "test": "node --test -r ts-node/register test/*.test.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "adm-zip": "^0.6.1",
+    "csv-parser": "^3.2.1",
+    "dotenv": "^18.0.8",
+    "express": "^5.3.0",
+    "multer": "^2.4.0",
+    "stream-json": "^3.7.0",
+    "zod": "^4.6.7"
+  },
+  "optionalDependencies": {
+    "bullmq": "^6.4.0",
+    "ioredis": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.3.0",
+    "@types/node": "^26.6.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}
