@@ -205,34 +205,81 @@ The wizard saves after selection changes and before moving to the next step.
 
 Selections may contain only IDs and names present in that archive.
 
+### Relationship claims
+Saving an archive selection creates one persisted claim for each selected
+follower or followed account in that archive JSON. Each claim records the
+platform, relationship direction, source and target platform identities, a
+stable relationship key for deduplicating claims made from either side, and
+the archive/import provenance. Claims are explicitly unverified user-provided
+archive evidence; importing one does not create or confirm an MNTL follow.
+
+X identities are matched by exact exported account ID. Instagram and TikTok
+identities whose relationship exports contain usernames are matched by a
+case-insensitive, `@`-independent handle; other identities use an exact
+platform account ID unless a known handle is available. Matching returns
+pending claims for either the source or target account as candidates for the
+MNTL application to present.
+Claim records support pending identity match, awaiting confirmation, confirmed,
+rejected, and withdrawn states, with separate source/target MNTL user
+confirmations. The archive store only marks a claim confirmed after two
+different MNTL user IDs have confirmed it. The future MNTL application must
+authenticate and authorize each user before recording their confirmation;
+handle matches are not proof of account ownership.
+
+**Endpoint**: `GET /api/archives/:archiveId/relationship-claims`
+
+Returns the claims generated from the archive's saved selection. The store's
+`findRelationshipClaimsForIdentity` method finds pending claims matching either
+the source or target identity and identifies which side matched. These records
+are prepared locally by this migration tool; delivery to signed-in MNTL users
+requires integration with the MNTL application.
+
 ### Fetch posts and replies
 `GET /api/data/posts` returns non-reply posts and reels. `GET /api/data/replies`
 returns replies separately. Both responses include the saved selection, and the
 reply records include the parent post ID when the X archive provides it.
 
 ### Crossmatching likes to posts
-`GET /api/data/likes` returns imported likes with `matchedPost` and `matchType`.
-Likes are matched first by platform and post identifier. Instagram exports that
-do not share an identifier use an exact, normalized caption match only when it
-identifies one post uniquely. Unresolved likes remain stored and are checked
-again whenever another archive is imported. The response also includes
-`matchedCount` and `unmatchedCount`.
+`GET /api/data/likes` returns imported likes. Archive comparisons match likes
+first by platform and post identifier. Instagram exports that do not share an
+identifier use an exact, normalized caption match only when it identifies one
+post uniquely. Unresolved likes remain stored and are checked again whenever
+another archive is imported.
 For Instagram, the like `postId` is the archive's `fbid` when available; the
 URL-derived shortcode is retained separately as `postShortcode`.
+
+`GET /api/data/comments` returns comments included in the uploaded archive.
+TikTok comments are read from `Comment.Comments.CommentsList` in its single-file
+export. Both imported likes and comments are shown in separate tabs on the
+migration review summary; they are stored for reference and are not currently
+selection controls or transferred to MNTL.
+
+Archive comparisons also report likes and comments from both accounts that
+reference the same post ID in the `Matched activity` panel. TikTok video IDs
+are extracted from direct `/video/<id>` links, including comment
+`originalPostUrl` values. This can match interactions even when the target
+account's archive does not contain the post itself. TikTok's own-post media
+links may omit the public video ID, so those posts cannot be matched by ID
+unless the export provides a direct video link.
 
 The default loader also stores data in process memory, but each completed account
 archive is saved locally as a JSON file in `data/archives/`. These files persist
 across server restarts and are used for account-to-account comparisons.
-Post media is served from the retained uploaded archive through `/api/media`;
-uploaded archives must remain available while their posts are displayed.
+Downloaded TikTok videos are stored under `data/media/` alongside their archive
+records. Other archive media is served from the retained uploaded archive
+through `/api/media`; those uploaded archives must remain available while their
+posts are displayed. TikTok export video links are signed and may expire, so
+re-export the data from TikTok if a download fails.
 
 After an archive is processed, the web app guides the user through a three-step
 selection wizard: posts (with captions and media), followers, then following.
 Follower and following lists can be searched. All items are selected by default,
 and each step saves changes to the archive's JSON file before continuing.
-The review page lists the selected posts and media, selected followers and
-following, and matching accounts and likes. The user confirms the selection to
-save it and complete the flow. They can then upload another platform archive;
+The review page lists the imported likes and comments alongside selected posts,
+followers and following, and matched accounts and likes. The likes and comments
+tabs show the records present in the uploaded archive; an empty comments list is
+reported as no comments included. The user confirms the selection to save it and
+complete the flow. They can then upload another platform archive;
 platforms already uploaded in the same browser tab are excluded from that flow.
 Comments are not included in migration comparisons.
 
@@ -344,7 +391,10 @@ Get list of supported platforms.
 
 ### TikTok
 - Detects TikTok-specific archive paths or `user_data` exports rather than generic `video` filenames
-- Parses JSON and CSV formats
+- Parses TikTok's single-file `user_data_tiktok.json` export for the account profile, the account's own posted videos, followers, following, and liked-video links
+- Downloads only videos listed under `Post.Posts.VideoList` from HTTPS TikTok CDN hosts, then stores the video files under `data/media/` and serves them through `/api/media`
+- Keeps downloaded video storage bounded (250 MB per video, 500 MB per archive); download errors fail the import with an explicit job error
+- Also supports legacy `video_data.json` and `posts.csv` post exports
 - Handles video-specific metrics (views, shares)
 - Extracts hashtags and mentions from descriptions
 

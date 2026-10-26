@@ -1,4 +1,5 @@
 import AdmZip from 'adm-zip';
+import { createHash } from 'crypto';
 import { BaseAdapter } from '../BaseAdapter';
 import { NormalizedPost, NormalizedUser, NormalizedFollowRelation, NormalizedLike, NormalizedComment, Platform } from '../../types/schemas';
 
@@ -16,32 +17,60 @@ export class TikTokAdapter extends BaseAdapter {
 
   async extractPosts(zipPath: string): Promise<NormalizedPost[]> {
     const zip = new AdmZip(zipPath);
-    const posts: NormalizedPost[] = [];
 
     try {
       const entries = zip.getEntries();
-      const postFiles = entries.filter(entry =>
-        entry.entryName.includes('video') &&
-        (entry.entryName.endsWith('.json') || entry.entryName.endsWith('.csv'))
+      const archiveEntry = entries.find(entry =>
+        /(?:^|\/)user_data_tiktok\.json$/i.test(entry.entryName.replace(/\\/g, '/'))
       );
-
-      for (const entry of postFiles) {
-        const content = entry.getData().toString('utf8');
-
-        if (entry.entryName.endsWith('.json')) {
-          const data = JSON.parse(content);
-          const extractedPosts = this.parseVideoJSON(data);
-          posts.push(...extractedPosts);
-        } else if (entry.entryName.endsWith('.csv')) {
-          const extractedPosts = this.parseVideoCSV(content);
-          posts.push(...extractedPosts);
-        }
+      if (archiveEntry) {
+        const data = JSON.parse(archiveEntry.getData().toString('utf8'));
+        return this.parsePublishedVideoList(data.Post?.Posts?.VideoList);
       }
+
+      const legacyEntries = entries.filter(entry =>
+        /(?:^|\/)video_data\.json$/i.test(entry.entryName.replace(/\\/g, '/')) ||
+        /(?:^|\/)posts\.csv$/i.test(entry.entryName.replace(/\\/g, '/'))
+      );
+      return legacyEntries.flatMap(entry => {
+        const content = entry.getData().toString('utf8');
+        return entry.entryName.toLowerCase().endsWith('.json')
+          ? this.parseVideoJSON(JSON.parse(content))
+          : this.parseVideoCSV(content);
+      });
     } catch (error) {
       console.error('Error extracting TikTok posts:', error);
+      throw error;
     }
+  }
 
-    return posts;
+  private parsePublishedVideoList(videoList: unknown): NormalizedPost[] {
+    if (!Array.isArray(videoList)) return [];
+
+    return videoList.flatMap((item: any) => {
+      if (typeof item.Link !== 'string' || typeof item.Date !== 'string') return [];
+      const createdAt = new Date(item.Date);
+      if (!Number.isFinite(createdAt.getTime())) return [];
+
+      const videoId = this.videoIdFromUrl(item.Link);
+      return [{
+        originalPlatformId: videoId,
+        platform: this.platform,
+        postType: 'reel',
+        content: typeof item.Title === 'string' && item.Title ? item.Title : undefined,
+        mediaUrls: [item.Link],
+        mediaTypes: ['video'],
+        createdAt,
+        metrics: {
+          likesCount: this.numberFromValue(item.Likes),
+          commentsCount: 0,
+          sharesCount: 0,
+          viewsCount: 0,
+        },
+        location: typeof item.Location === 'string' && item.Location ? item.Location : undefined,
+        isDeleted: false,
+      }];
+    });
   }
 
   private parseVideoJSON(data: any): NormalizedPost[] {
@@ -52,18 +81,22 @@ export class TikTokAdapter extends BaseAdapter {
       const items = Array.isArray(videoList) ? videoList : videoList.ItemList || [];
 
       for (const item of items) {
+        const videoUrl = item.VideoUrl || item.Link;
+        const createdAt = item.Date ? new Date(item.Date) : undefined;
+        if (createdAt && !Number.isFinite(createdAt.getTime())) continue;
         const post: NormalizedPost = {
-          originalPlatformId: item.VideoID || item.id || `tt_${Date.now()}_${Math.random()}`,
+          originalPlatformId: String(item.VideoID || item.id || (videoUrl ? this.videoIdFromUrl(videoUrl) : '')),
           platform: this.platform,
-          content: item.Description || item.text || undefined,
-          mediaUrls: item.VideoUrl ? [item.VideoUrl] : undefined,
-          mediaTypes: ['video'],
-          createdAt: item.Date ? new Date(item.Date) : new Date(),
+          postType: 'reel',
+          content: item.Description || item.Title || item.text || undefined,
+          mediaUrls: videoUrl ? [videoUrl] : undefined,
+          mediaTypes: videoUrl ? ['video'] : undefined,
+          createdAt: createdAt || new Date(),
           metrics: {
-            likesCount: item.DiggCount || 0,
-            commentsCount: item.CommentCount || 0,
-            sharesCount: item.ShareCount || 0,
-            viewsCount: item.PlayCount || 0,
+            likesCount: this.numberFromValue(item.DiggCount ?? item.Likes),
+            commentsCount: this.numberFromValue(item.CommentCount),
+            sharesCount: this.numberFromValue(item.ShareCount),
+            viewsCount: this.numberFromValue(item.PlayCount),
           },
           hashtags: item.Hashtags?.map((h: any) => h.HashtagName) || undefined,
           mentions: item.Mentions || undefined,
@@ -89,18 +122,21 @@ export class TikTokAdapter extends BaseAdapter {
       const [date, description, videoUrl, likes, comments, shares, views] = line.split(',').map(s => s?.trim());
 
       if (date) {
+        const createdAt = new Date(date);
+        if (!Number.isFinite(createdAt.getTime())) continue;
         posts.push({
-          originalPlatformId: `tt_${Date.now()}_${Math.random()}`,
+          originalPlatformId: videoUrl ? this.videoIdFromUrl(videoUrl) : `tt_${createHash('sha256').update(line).digest('hex').slice(0, 20)}`,
           platform: this.platform,
+          postType: 'reel',
           content: description || undefined,
           mediaUrls: videoUrl ? [videoUrl] : undefined,
-          mediaTypes: ['video'],
-          createdAt: new Date(date),
+          mediaTypes: videoUrl ? ['video'] : undefined,
+          createdAt,
           metrics: {
-            likesCount: parseInt(likes) || 0,
-            commentsCount: parseInt(comments) || 0,
-            sharesCount: parseInt(shares) || 0,
-            viewsCount: parseInt(views) || 0,
+            likesCount: this.numberFromValue(likes),
+            commentsCount: this.numberFromValue(comments),
+            sharesCount: this.numberFromValue(shares),
+            viewsCount: this.numberFromValue(views),
           },
           hashtags: description ? this.extractHashtags(description) : undefined,
           mentions: description ? this.extractMentions(description) : undefined,
@@ -118,6 +154,29 @@ export class TikTokAdapter extends BaseAdapter {
 
     try {
       const entries = zip.getEntries();
+      const archiveEntry = entries.find(entry =>
+        /(?:^|\/)user_data_tiktok\.json$/i.test(entry.entryName.replace(/\\/g, '/'))
+      );
+      if (archiveEntry) {
+        const data = JSON.parse(archiveEntry.getData().toString('utf8'));
+        const profile = data['Profile And Settings']?.['Profile Info']?.ProfileMap;
+        const username = typeof profile?.userName === 'string' ? profile.userName : '';
+        if (!username) return users;
+        users.push({
+          originalPlatformId: username,
+          platform: this.platform,
+          username,
+          displayName: typeof profile.displayName === 'string' ? profile.displayName : undefined,
+          bio: typeof profile.bioDescription === 'string' ? profile.bioDescription : undefined,
+          profilePictureUrl: typeof profile.profilePhoto === 'string' ? profile.profilePhoto : undefined,
+          followersCount: this.numberFromValue(profile.followerCount),
+          followingCount: this.numberFromValue(profile.followingCount),
+          postsCount: Array.isArray(data.Post?.Posts?.VideoList) ? data.Post.Posts.VideoList.length : 0,
+          verified: false,
+        });
+        return users;
+      }
+
       const profileFiles = entries.filter(entry =>
         entry.entryName.includes('user') && entry.entryName.endsWith('.json')
       );
@@ -154,6 +213,36 @@ export class TikTokAdapter extends BaseAdapter {
 
     try {
       const entries = zip.getEntries();
+      const archiveEntry = entries.find(entry =>
+        /(?:^|\/)user_data_tiktok\.json$/i.test(entry.entryName.replace(/\\/g, '/'))
+      );
+      if (archiveEntry) {
+        const data = JSON.parse(archiveEntry.getData().toString('utf8'));
+        const following = data['Profile And Settings']?.Following?.Following;
+        const followers = data['Profile And Settings']?.Follower?.FansList;
+        for (const item of Array.isArray(following) ? following : []) {
+          const username = typeof item.UserName === 'string' ? item.UserName.trim() : '';
+          if (!username) continue;
+          relations.push({
+            followerId: 'me',
+            followingId: username,
+            platform: this.platform,
+            followedAt: this.parseTikTokDate(item.Date),
+          });
+        }
+        for (const item of Array.isArray(followers) ? followers : []) {
+          const username = typeof item.UserName === 'string' ? item.UserName.trim() : '';
+          if (!username) continue;
+          relations.push({
+            followerId: username,
+            followingId: 'me',
+            platform: this.platform,
+            followedAt: this.parseTikTokDate(item.Date),
+          });
+        }
+        return relations;
+      }
+
       const followFiles = entries.filter(entry =>
         (entry.entryName.toLowerCase().includes('following') ||
           entry.entryName.toLowerCase().includes('follower')) &&
@@ -207,6 +296,25 @@ export class TikTokAdapter extends BaseAdapter {
 
     try {
       const entries = zip.getEntries();
+      const archiveEntry = entries.find(entry =>
+        /(?:^|\/)user_data_tiktok\.json$/i.test(entry.entryName.replace(/\\/g, '/'))
+      );
+      if (archiveEntry) {
+        const data = JSON.parse(archiveEntry.getData().toString('utf8'));
+        const items = data['Likes and Favorites']?.['Like List']?.ItemFavoriteList;
+        for (const item of Array.isArray(items) ? items : []) {
+          if (typeof item.link !== 'string') continue;
+          likes.push({
+            userId: data['Profile And Settings']?.['Profile Info']?.ProfileMap?.userName || 'me',
+            postId: this.videoIdFromUrl(item.link),
+            platform: this.platform,
+            likedAt: this.parseTikTokDate(item.date),
+            postUrl: item.link,
+          });
+        }
+        return likes;
+      }
+
       const likeFiles = entries.filter(entry =>
         entry.entryName.includes('like') &&
         (entry.entryName.endsWith('.json') || entry.entryName.endsWith('.csv'))
@@ -257,6 +365,37 @@ export class TikTokAdapter extends BaseAdapter {
 
     try {
       const entries = zip.getEntries();
+      const archiveEntry = entries.find(entry =>
+        /(?:^|\/)user_data_tiktok\.json$/i.test(entry.entryName.replace(/\\/g, '/'))
+      );
+      if (archiveEntry) {
+        const data = JSON.parse(archiveEntry.getData().toString('utf8'));
+        const commentList = data.Comment?.Comments?.CommentsList;
+        for (const item of Array.isArray(commentList) ? commentList : []) {
+          const content = item.CommentText || item.comment || item.text || item.Content;
+          if (typeof content !== 'string' || !content.trim()) continue;
+          const postUrlValue = item.originalPostUrl || item['original post link'] || item.Link;
+          const postUrl = typeof postUrlValue === 'string' && postUrlValue !== 'N/A'
+            ? postUrlValue
+            : '';
+          const videoId = postUrl.match(/\/video\/(\d+)/i)?.[1];
+          const postOwnerId = postUrl.match(/\/@([^/]+)\/video\//i)?.[1];
+          const createdAt = this.parseTikTokDate(item.Date || item.CreateTime || item.date) || new Date();
+          comments.push({
+            originalPlatformId: String(item.CommentID || item.id || `tt_comment_${comments.length}`),
+            platform: this.platform,
+            postId: String(item.VideoID || item.VideoId || item.videoId || item.postId || videoId || 'unknown'),
+            postOwnerId,
+            postUrl: postUrl || undefined,
+            userId: String(item.UserName || item.Username || item.username || 'me'),
+            content: content.trim(),
+            createdAt,
+            likesCount: this.numberFromValue(item.DiggCount ?? item.Likes),
+          });
+        }
+        return comments;
+      }
+
       const commentFiles = entries.filter(entry =>
         entry.entryName.includes('comment') &&
         (entry.entryName.endsWith('.json') || entry.entryName.endsWith('.csv'))
@@ -281,6 +420,7 @@ export class TikTokAdapter extends BaseAdapter {
               likesCount: item.DiggCount || 0,
             });
           }
+
         } else if (entry.entryName.endsWith('.csv')) {
           const lines = content.split('\n').slice(1);
           for (const line of lines) {
@@ -305,6 +445,29 @@ export class TikTokAdapter extends BaseAdapter {
     }
 
     return comments;
+  }
+
+  private videoIdFromUrl(value: string): string {
+    try {
+      const url = new URL(value);
+      const sharedVideoId = url.pathname.match(/\/video\/(\d+)/i)?.[1];
+      if (sharedVideoId) return sharedVideoId;
+      const canonicalResource = `${url.hostname.toLowerCase()}${url.pathname}`;
+      return `tt_${createHash('sha256').update(canonicalResource).digest('hex').slice(0, 24)}`;
+    } catch {
+      return `tt_${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
+    }
+  }
+
+  private parseTikTokDate(value: unknown): Date | undefined {
+    if (typeof value !== 'string' || !value.trim()) return undefined;
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? date : undefined;
+  }
+
+  private numberFromValue(value: unknown): number {
+    const number = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(number) ? number : 0;
   }
 
   private extractHashtags(text: string): string[] {

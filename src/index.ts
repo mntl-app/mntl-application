@@ -7,7 +7,7 @@ async function startServer() {
   try {
     if (process.env.NODE_ENV === 'development') {
       const removedCount = await clearDevelopmentArchives();
-      console.log(`Development startup cleared ${removedCount} stored archive file(s)`);
+      console.log(`Development startup cleared ${removedCount} managed archive/media item(s)`);
     }
 
     const { app } = await import('./api/server');

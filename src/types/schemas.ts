@@ -74,6 +74,7 @@ export const CommentSchema = z.object({
   platform: PlatformEnum,
   postId: z.string(),
   postOwnerId: z.string().optional(),
+  postUrl: z.string().optional(),
   userId: z.string(),
   content: z.string(),
   createdAt: z.date(),

@@ -14,15 +14,22 @@ export async function clearDevelopmentArchives(
     {
       directory: path.join(rootDirectory, 'uploads'),
       shouldRemove: (name: string) => UPLOAD_FILE_PATTERN.test(name),
+      directoriesOnly: false,
     },
     {
       directory: path.join(rootDirectory, 'data', 'archives'),
       shouldRemove: (name: string) => ARCHIVE_FILE_PATTERN.test(name),
+      directoriesOnly: false,
+    },
+    {
+      directory: path.join(rootDirectory, 'data', 'media'),
+      shouldRemove: (name: string) => /^[a-f0-9]{32}$/i.test(name),
+      directoriesOnly: true,
     },
   ];
   let removedCount = 0;
 
-  for (const { directory, shouldRemove } of managedDirectories) {
+  for (const { directory, shouldRemove, directoriesOnly } of managedDirectories) {
     let entries;
     try {
       entries = await fs.readdir(directory, { withFileTypes: true });
@@ -32,8 +39,16 @@ export async function clearDevelopmentArchives(
     }
 
     for (const entry of entries) {
-      if (!entry.isFile() || !shouldRemove(entry.name)) continue;
-      await fs.unlink(path.join(directory, entry.name));
+      if (!shouldRemove(entry.name)) continue;
+      if (entry.isFile()) {
+        if (directoriesOnly) continue;
+        await fs.unlink(path.join(directory, entry.name));
+      } else if (entry.isDirectory()) {
+        if (!directoriesOnly) continue;
+        await fs.rm(path.join(directory, entry.name), { recursive: true });
+      } else {
+        continue;
+      }
       removedCount++;
     }
   }

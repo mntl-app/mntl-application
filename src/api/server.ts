@@ -177,6 +177,19 @@ app.post('/api/archives/:archiveId/selection', async (req: Request, res: Respons
   }
 });
 
+app.get('/api/archives/:archiveId/relationship-claims', async (req: Request, res: Response) => {
+  try {
+    const archiveId = Array.isArray(req.params.archiveId) ? req.params.archiveId[0] : req.params.archiveId;
+    const archive = await archiveStore.get(archiveId);
+    if (!archive) return res.status(404).json({ error: 'Stored archive not found' });
+    const relationshipClaims = archive.relationshipClaims || [];
+    res.json({ archiveId, relationshipClaims, count: relationshipClaims.length });
+  } catch (error) {
+    console.error('Error fetching relationship claims:', error);
+    res.status(500).json({ error: 'Failed to fetch relationship claims' });
+  }
+});
+
 app.get('/api/data/posts', async (req: Request, res: Response) => {
   try {
     const archive = await getRequestedArchive(req, res);
@@ -286,6 +299,18 @@ app.get('/api/data/likes', async (req: Request, res: Response) => {
   }
 });
 
+app.get('/api/data/comments', async (req: Request, res: Response) => {
+  try {
+    const archive = await getRequestedArchive(req, res);
+    if (res.headersSent) return;
+    const comments = archive?.comments || [];
+    res.json({ comments, count: comments.length });
+  } catch (error) {
+    console.error('Error fetching comments:', error);
+    res.status(500).json({ error: 'Failed to fetch comments' });
+  }
+});
+
 app.get('/api/data/summary', async (req: Request, res: Response) => {
   try {
     const archive = await getRequestedArchive(req, res);
@@ -298,6 +323,7 @@ app.get('/api/data/summary', async (req: Request, res: Response) => {
       followers: archive?.followers.length || 0,
       following: archive?.following.length || 0,
       likes: archive?.likes.length || 0,
+      comments: archive?.comments?.length || 0,
     };
     res.json(summary);
   } catch (error) {
@@ -325,10 +351,31 @@ app.get('/api/media', (req: Request, res: Response) => {
     const archiveId = typeof req.query.archiveId === 'string' ? req.query.archiveId : '';
     const entryName = typeof req.query.entry === 'string' ? req.query.entry : '';
     const zipPath = mediaArchives.get(archiveId);
-    if (!zipPath || !entryName) {
+    if (!entryName) {
       return res.status(404).json({ error: 'Media file not found' });
     }
     const normalizedEntryName = entryName.replace(/\\/g, '/');
+    if (
+      /^[a-f0-9]{32}$/i.test(archiveId) &&
+      /^media\/tiktok\/video-\d+\.mp4$/i.test(normalizedEntryName)
+    ) {
+      const mediaPath = path.join(
+        process.cwd(),
+        'data',
+        'media',
+        archiveId,
+        path.basename(normalizedEntryName)
+      );
+      if (!fs.existsSync(mediaPath)) {
+        return res.status(404).json({ error: 'Media file not found' });
+      }
+      res.setHeader('Content-Type', 'video/mp4');
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      return res.sendFile(mediaPath);
+    }
+    if (!zipPath) {
+      return res.status(404).json({ error: 'Media file not found' });
+    }
     const isSupportedMediaPath = normalizedEntryName.startsWith('media/') ||
       normalizedEntryName.startsWith('data/tweets_media/');
     if (

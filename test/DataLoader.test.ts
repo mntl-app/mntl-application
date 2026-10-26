@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { FacebookAdapter } from '../src/adapters/facebook/FacebookAdapter';
 import { InstagramAdapter } from '../src/adapters/instagram/InstagramAdapter';
 import { TikTokAdapter } from '../src/adapters/tiktok/TikTokAdapter';
+import { TikTokMediaDownloader } from '../src/adapters/tiktok/TikTokMediaDownloader';
 import { XAdapter } from '../src/adapters/x/XAdapter';
 import { ArchiveStore, compareArchives, StoredArchive } from '../src/etl/load/ArchiveStore';
 import { InMemoryDataLoader } from '../src/etl/load/DataLoader';
@@ -42,26 +43,193 @@ test('clears stored archives and uploaded ZIPs only for development startup', as
   const directory = mkdtempSync(join(tmpdir(), 'development-archive-cleanup-test-'));
   const uploads = join(directory, 'uploads');
   const archives = join(directory, 'data', 'archives');
+  const media = join(directory, 'data', 'media');
   mkdirSync(uploads);
   mkdirSync(archives, { recursive: true });
+  mkdirSync(join(media, 'b'.repeat(32)), { recursive: true });
+  mkdirSync(join(media, 'keep-me'), { recursive: true });
   writeFileSync(join(uploads, 'a'.repeat(32)), 'uploaded ZIP');
   writeFileSync(join(uploads, 'keep-me.txt'), 'unrelated upload file');
   writeFileSync(join(archives, 'archive-1.json'), 'stored archive');
   writeFileSync(join(archives, 'archive-1.json.123.tmp'), 'temporary archive');
   writeFileSync(join(archives, 'keep-me.txt'), 'unrelated file');
+  writeFileSync(join(media, 'b'.repeat(32), 'video-0.mp4'), 'downloaded video');
+  writeFileSync(join(media, 'keep-me', 'video.mp4'), 'unrelated video');
 
   try {
     assert.equal(await clearDevelopmentArchives(directory, 'production'), 0);
     assert.equal(existsSync(join(archives, 'archive-1.json')), true);
 
-    assert.equal(await clearDevelopmentArchives(directory, 'development'), 3);
+    assert.equal(await clearDevelopmentArchives(directory, 'development'), 4);
     assert.equal(existsSync(join(uploads, 'a'.repeat(32))), false);
     assert.equal(existsSync(join(archives, 'archive-1.json')), false);
     assert.equal(existsSync(join(archives, 'archive-1.json.123.tmp')), false);
+    assert.equal(existsSync(join(media, 'b'.repeat(32))), false);
+    assert.equal(existsSync(join(media, 'keep-me', 'video.mp4')), true);
     assert.equal(readFileSync(join(uploads, 'keep-me.txt'), 'utf8'), 'unrelated upload file');
     assert.equal(readFileSync(join(archives, 'keep-me.txt'), 'utf8'), 'unrelated file');
     assert.equal(existsSync(uploads), true);
     assert.equal(existsSync(archives), true);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('extracts posted TikTok videos, account, followers, following, and likes from single-file export', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'tiktok-archive-test-'));
+  const archivePath = join(directory, 'archive.zip');
+  const zip = new AdmZip();
+  const archiveData = {
+    Post: {
+      Posts: {
+        VideoList: [{
+          Date: '2026-10-20 18:30:00',
+          Link: 'https://video-useastred.tiktokv.eu/storage/v1/video-resource?signature=secret',
+          Likes: '19',
+          Title: 'My posted video',
+          Location: 'Example city',
+        }],
+      },
+    },
+    'Profile And Settings': {
+      'Profile Info': {
+        ProfileMap: {
+          userName: 'creator_handle',
+          displayName: 'Creator',
+          bioDescription: 'Creator profile',
+          followerCount: 11,
+          followingCount: 66,
+        },
+      },
+      Follower: { FansList: [{ UserName: 'follower_handle', Date: '2026-10-01 00:00:00' }] },
+      Following: { Following: [{ UserName: 'following_handle', Date: '2026-10-02 00:00:00' }] },
+    },
+    'Likes and Favorites': {
+      'Like List': {
+        ItemFavoriteList: [{
+          date: '2026-10-03 00:00:00',
+          link: 'https://www.tiktokv.com/share/video/7675674338401602849/',
+        }],
+      },
+    },
+    Comment: {
+      Comments: {
+        CommentsList: [{
+          CommentID: 'comment-1',
+          comment: 'A comment from this account',
+          date: '2026-10-05 12:00:00 UTC',
+          originalPostUrl: 'https://www.tiktok.com/@creator/video/7675674338401602849',
+        }],
+      },
+    },
+    'Your Activity': {
+      'Watch History': {
+        VideoList: [{
+          Link: 'https://video-useastred.tiktokv.eu/storage/v1/someone-elses-video',
+          Date: '2026-10-04 00:00:00',
+        }],
+      },
+    },
+  };
+  zip.addFile('user_data_tiktok.json', Buffer.from(JSON.stringify(archiveData)));
+  zip.writeZip(archivePath);
+
+  try {
+    const adapter = new TikTokAdapter();
+    assert.equal(adapter.detect(zip.getEntries().map(entry => entry.entryName)), true);
+    const posts = await adapter.extractPosts(archivePath);
+    assert.equal(posts.length, 1);
+    assert.equal(posts[0].platform, 'tiktok');
+    assert.equal(posts[0].postType, 'reel');
+    assert.equal(posts[0].content, 'My posted video');
+    assert.equal(posts[0].metrics?.likesCount, 19);
+    assert.match(posts[0].originalPlatformId, /^tt_[a-f0-9]{24}$/);
+
+    const [user] = await adapter.extractUsers(archivePath);
+    assert.equal(user.username, 'creator_handle');
+    assert.equal(user.displayName, 'Creator');
+    assert.equal(user.followersCount, 11);
+    assert.equal(user.followingCount, 66);
+
+    const relations = await adapter.extractFollowRelations(archivePath);
+    assert.deepEqual(
+      relations.map(({ followerId, followingId }) => [followerId, followingId]),
+      [
+        ['me', 'following_handle'],
+        ['follower_handle', 'me'],
+      ]
+    );
+
+    const [like] = await adapter.extractLikes(archivePath);
+    assert.equal(like.postId, '7675674338401602849');
+    assert.equal(like.userId, 'creator_handle');
+
+    const [comment] = await adapter.extractComments(archivePath);
+    assert.equal(comment.originalPlatformId, 'comment-1');
+    assert.equal(comment.postId, '7675674338401602849');
+    assert.equal(comment.postOwnerId, 'creator');
+    assert.equal(
+      comment.postUrl,
+      'https://www.tiktok.com/@creator/video/7675674338401602849'
+    );
+    assert.equal(comment.userId, 'me');
+    assert.equal(comment.content, 'A comment from this account');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('downloads only allowlisted TikTok video links into archive media storage', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'tiktok-video-download-test-'));
+  const archiveId = 'a'.repeat(32);
+  let fetchCount = 0;
+  const downloader = new TikTokMediaDownloader(directory, async input => {
+    fetchCount++;
+    assert.equal(new URL(String(input)).hostname, 'video-useastred.tiktokv.eu');
+    return new Response(Buffer.from('video-content'), {
+      status: 200,
+      headers: { 'content-type': 'video/mp4' },
+    });
+  });
+  const post = PostSchema.parse({
+    originalPlatformId: 'tt_video',
+    platform: 'tiktok',
+    postType: 'reel',
+    mediaUrls: ['https://video-useastred.tiktokv.eu/storage/video?signature=hidden'],
+    mediaTypes: ['video'],
+    createdAt: new Date('2026-10-20T18:30:00.000Z'),
+  });
+
+  try {
+    const [downloaded] = await downloader.downloadOwnPostedVideos([post], archiveId);
+    assert.equal(fetchCount, 1);
+    assert.deepEqual(downloaded.mediaUrls, ['media/tiktok/video-0.mp4']);
+    assert.equal(
+      readFileSync(join(directory, archiveId, 'video-0.mp4'), 'utf8'),
+      'video-content'
+    );
+
+    const rejectedDownloader = new TikTokMediaDownloader(join(directory, 'rejected'), async () => {
+      throw new Error('Unapproved host should not be fetched');
+    });
+    await assert.rejects(
+      rejectedDownloader.downloadOwnPostedVideos([{
+        ...post,
+        mediaUrls: ['https://example.com/video.mp4'],
+      }], 'b'.repeat(32)),
+      /approved HTTPS host/
+    );
+
+    const redirectDownloader = new TikTokMediaDownloader(join(directory, 'redirected'), async () =>
+      new Response(null, {
+        status: 302,
+        headers: { location: 'http://127.0.0.1/private-resource' },
+      })
+    );
+    await assert.rejects(
+      redirectDownloader.downloadOwnPostedVideos([post], 'c'.repeat(32)),
+      /approved HTTPS host/
+    );
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -102,6 +270,53 @@ test('does not guess when multiple posts have the same caption', async () => {
   const [match] = loader.getLikeMatches();
   assert.equal(match.matchType, null);
   assert.equal(match.matchedPost, null);
+});
+
+test('matches likes and comments across TikTok archives by direct video ID', () => {
+  const postId = '7661981101627280672';
+  const current: StoredArchive = {
+    archiveId: 'current',
+    ownerId: 'sofiefant',
+    platform: 'tiktok',
+    importedAt: '2026-10-26T00:00:00.000Z',
+    followers: [],
+    following: [],
+    posts: [],
+    likes: [{
+      userId: 'sofiefant',
+      postId,
+      platform: 'tiktok',
+      postUrl: `https://www.tiktokv.com/share/video/${postId}/`,
+      likedAt: new Date('2026-10-26T18:07:25.000Z'),
+    }],
+  };
+  const other: StoredArchive = {
+    archiveId: 'other',
+    ownerId: 'rgbanana8',
+    platform: 'tiktok',
+    importedAt: '2026-10-26T00:00:00.000Z',
+    followers: [],
+    following: [],
+    posts: [],
+    likes: [],
+    comments: [{
+      originalPlatformId: 'comment-1',
+      platform: 'tiktok',
+      postId,
+      postOwnerId: '7648949224730838048',
+      postUrl: `https://www.tiktok.com/@7648949224730838048/video/${postId}`,
+      userId: 'me',
+      content: '🥰',
+      createdAt: new Date('2026-10-26T18:07:25.000Z'),
+      likesCount: 0,
+    }],
+  };
+
+  const [match] = compareArchives(current, other).sharedPostInteractions;
+  assert.equal(match.postId, postId);
+  assert.deepEqual(match.current.map(interaction => interaction.type), ['like']);
+  assert.deepEqual(match.other.map(interaction => interaction.type), ['comment']);
+  assert.equal(match.other[0].content, '🥰');
 });
 
 test('does not detect a platform from generic post, comment, data, or video names', () => {
@@ -390,6 +605,15 @@ test('persists account archives and matches relationships and likes across accou
       createLike('bob-post-id'),
       createLike('legacy-id', 'Bob post caption'),
     ],
+    comments: [{
+      originalPlatformId: 'alice-comment-id',
+      platform: 'instagram',
+      postId: 'bob-post-id',
+      userId: 'alice',
+      content: 'Alice comment',
+      createdAt: new Date('2026-01-01T12:00:00.000Z'),
+      likesCount: 2,
+    }],
   };
   const bob: StoredArchive = {
     archiveId: 'bob-archive',
@@ -409,6 +633,7 @@ test('persists account archives and matches relationships and likes across accou
     const loaded = await store.get('alice-archive');
     assert.equal(loaded?.ownerId, 'alice');
     assert.equal(loaded?.posts[0].content, 'Alice post caption');
+    assert.equal(loaded?.comments?.[0].content, 'Alice comment');
     assert.equal((await store.list()).length, 2);
 
     const [comparison] = await store.compare('alice-archive');
@@ -481,6 +706,185 @@ test('resolves known X account IDs to handles and exposes handles in archive com
     const [comparison] = await store.compare('alice-x');
     assert.equal(comparison.ownerId, '2002');
     assert.equal(comparison.ownerHandle, 'bob_handle');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('stores selected X relationships as exact-ID claims and requires confirmation by both accounts', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'relationship-claims-test-'));
+  const store = new ArchiveStore(directory);
+  const alice: StoredArchive = {
+    archiveId: 'alice-x-claims',
+    ownerId: '1001',
+    ownerHandle: 'alice_handle',
+    platform: 'x',
+    importedAt: '2026-01-01T00:00:00.000Z',
+    followers: ['2002', '4004'],
+    following: ['3003'],
+    posts: [],
+    likes: [],
+  };
+  const bob: StoredArchive = {
+    archiveId: 'bob-x-claims',
+    ownerId: '2002',
+    ownerHandle: 'bob_handle',
+    platform: 'x',
+    importedAt: '2026-01-02T00:00:00.000Z',
+    followers: [],
+    following: ['1001'],
+    posts: [],
+    likes: [],
+  };
+
+  try {
+    await store.save(alice);
+    await store.save(bob);
+
+    const savedAlice = await store.saveSelection(alice.archiveId, {
+      postIds: [],
+      followers: ['2002', '4004'],
+      following: ['3003'],
+    });
+    const aliceClaims = savedAlice.relationshipClaims || [];
+    assert.equal(aliceClaims.length, 3);
+    const incomingClaim = aliceClaims.find(claim => claim.direction === 'target_follows_source');
+    const outgoingClaim = aliceClaims.find(claim =>
+      claim.direction === 'source_follows_target' && claim.targetAccount.platformAccountId === '3003'
+    );
+    const pendingWithdrawnClaim = aliceClaims.find(claim =>
+      claim.targetAccount.platformAccountId === '4004'
+    );
+    assert.ok(incomingClaim);
+    assert.ok(outgoingClaim);
+    assert.ok(pendingWithdrawnClaim);
+    assert.equal(incomingClaim.targetAccount.handle, 'bob_handle');
+    assert.deepEqual(incomingClaim.targetIdentityMatch, {
+      type: 'platform_account_id',
+      value: '2002',
+    });
+    assert.equal(incomingClaim.verified, false);
+    assert.equal(incomingClaim.status, 'pending_identity_match');
+    assert.deepEqual(incomingClaim.confirmations, {});
+
+    const bobSelection = await store.saveSelection(bob.archiveId, {
+      postIds: [],
+      followers: [],
+      following: ['1001'],
+    });
+    assert.equal(
+      bobSelection.relationshipClaims?.[0].relationshipKey,
+      incomingClaim.relationshipKey
+    );
+    const bobMatches = await store.findRelationshipClaimsForIdentity('x', { platformAccountId: '2002' });
+    assert.deepEqual(
+      bobMatches.find(match => match.claim.claimId === incomingClaim.claimId)?.matchedSides,
+      ['target']
+    );
+    assert.deepEqual(
+      await store.findRelationshipClaimsForIdentity('x', { handle: 'bob_handle' }),
+      []
+    );
+    assert.deepEqual(
+      (await store.findRelationshipClaimsForIdentity('x', { platformAccountId: '1001' }))
+        .find(match => match.claim.claimId === incomingClaim.claimId)?.matchedSides,
+      ['source']
+    );
+
+    const awaitingConfirmation = await store.confirmRelationshipClaim(
+      alice.archiveId,
+      incomingClaim.claimId,
+      'source',
+      'mntl-alice'
+    );
+    assert.equal(awaitingConfirmation.status, 'awaiting_confirmation');
+    await assert.rejects(
+      store.confirmRelationshipClaim(alice.archiveId, incomingClaim.claimId, 'target', 'mntl-alice'),
+      /two different MNTL users/
+    );
+    const confirmed = await store.confirmRelationshipClaim(
+      alice.archiveId,
+      incomingClaim.claimId,
+      'target',
+      'mntl-bob'
+    );
+    assert.equal(confirmed.status, 'confirmed');
+    const rejected = await store.rejectRelationshipClaim(
+      alice.archiveId,
+      outgoingClaim.claimId,
+      'target',
+      'mntl-charlie'
+    );
+    assert.equal(rejected.status, 'rejected');
+
+    const deselected = await store.saveSelection(alice.archiveId, {
+      postIds: [],
+      followers: [],
+      following: [],
+    });
+    assert.equal(
+      deselected.relationshipClaims?.find(claim => claim.claimId === incomingClaim.claimId)?.status,
+      'confirmed'
+    );
+    assert.equal(
+      deselected.relationshipClaims?.find(claim => claim.claimId === outgoingClaim.claimId)?.status,
+      'rejected'
+    );
+    assert.equal(
+      deselected.relationshipClaims?.find(claim => claim.claimId === pendingWithdrawnClaim.claimId)?.status,
+      'withdrawn'
+    );
+    assert.equal(
+      (await store.findRelationshipClaimsForIdentity('x', { platformAccountId: '2002' }))
+        .some(match => match.claim.claimId === incomingClaim.claimId),
+      false
+    );
+    assert.deepEqual(await store.findRelationshipClaimsForIdentity('x', { platformAccountId: '4004' }), []);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('matches Instagram relationship claims by normalized account handle', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'instagram-relationship-claims-test-'));
+  const store = new ArchiveStore(directory);
+  const archive: StoredArchive = {
+    archiveId: 'instagram-claims',
+    ownerId: 'my_handle',
+    ownerHandle: 'my_handle',
+    platform: 'instagram',
+    importedAt: '2026-01-01T00:00:00.000Z',
+    followers: ['@SomeFollower'],
+    following: [],
+    posts: [],
+    likes: [],
+  };
+
+  try {
+    await store.save(archive);
+    const saved = await store.saveSelection(archive.archiveId, {
+      postIds: [],
+      followers: ['@SomeFollower'],
+      following: [],
+    });
+    assert.equal(saved.relationshipClaims?.[0].direction, 'target_follows_source');
+    assert.deepEqual(saved.relationshipClaims?.[0].targetIdentityMatch, {
+      type: 'handle',
+      value: 'somefollower',
+    });
+    assert.equal(
+      (await store.findRelationshipClaimsForIdentity('instagram', { handle: '@SOMEFOLLOWER' })).length,
+      1
+    );
+    assert.deepEqual(
+      (await store.findRelationshipClaimsForIdentity('instagram', { handle: 'MY_HANDLE' }))
+        .find(match => match.claim.claimId === saved.relationshipClaims?.[0].claimId)?.matchedSides,
+      ['source']
+    );
+    assert.equal(
+      (await store.findRelationshipClaimsForIdentity('instagram', { handle: 'different' })).length,
+      0
+    );
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

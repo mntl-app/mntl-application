@@ -1,6 +1,7 @@
 import { Queue, Worker, Job } from 'bullmq';
 import Redis from 'ioredis';
 import { AdapterFactory } from '../adapters/AdapterFactory';
+import { TikTokMediaDownloader } from '../adapters/tiktok/TikTokMediaDownloader';
 import { DataNormalizer } from '../etl/transform/DataNormalizer';
 import { InMemoryDataLoader } from '../etl/load/DataLoader';
 import { ArchiveStore } from '../etl/load/ArchiveStore';
@@ -111,10 +112,16 @@ export class JobQueue {
       await job.updateProgress(30);
 
       const archiveId = path.basename(zipPath);
-      const posts = (await adapter.extractPosts(zipPath)).map(post => ({
+      const extractedPosts = await adapter.extractPosts(zipPath);
+      const localPosts = adapter.platform === 'tiktok'
+        ? await new TikTokMediaDownloader().downloadOwnPostedVideos(extractedPosts, archiveId)
+        : extractedPosts;
+      const posts = localPosts.map(post => ({
         ...post,
         mediaUrls: post.mediaUrls?.map(
-          entry => `/api/media?archiveId=${encodeURIComponent(archiveId)}&entry=${encodeURIComponent(entry)}`
+          entry => entry.startsWith('/api/media?')
+            ? entry
+            : `/api/media?archiveId=${encodeURIComponent(archiveId)}&entry=${encodeURIComponent(entry)}`
         ),
       }));
       const currentProgress = typeof job.progress === 'object' ? job.progress : {};
@@ -133,6 +140,7 @@ export class JobQueue {
       const likes = await adapter.extractLikes(zipPath);
       await job.updateProgress(60);
 
+      const comments = await adapter.extractComments(zipPath);
       await job.updateProgress(70);
 
       const normalizedData = DataNormalizer.normalizeAll({
@@ -140,6 +148,7 @@ export class JobQueue {
         users,
         followRelations,
         likes,
+        comments,
       });
       normalizedData.followRelations = normalizedData.followRelations.map(relation => ({
         ...relation,
@@ -157,6 +166,7 @@ export class JobQueue {
       await this.dataLoader.saveUsers(normalizedData.users);
       await this.dataLoader.saveFollowRelations(normalizedData.followRelations);
       await this.dataLoader.saveLikes(normalizedData.likes);
+      await this.dataLoader.saveComments(normalizedData.comments);
       await this.dataLoader.disconnect();
 
       await this.archiveStore.save({
@@ -173,6 +183,7 @@ export class JobQueue {
           .map(relation => relation.followingId))],
         posts: normalizedData.posts,
         likes: normalizedData.likes,
+        comments: normalizedData.comments,
       });
 
       const importedPostKeys = new Set(

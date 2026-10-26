@@ -1,4 +1,5 @@
 import { AdapterFactory } from '../adapters/AdapterFactory';
+import { TikTokMediaDownloader } from '../adapters/tiktok/TikTokMediaDownloader';
 import { DataNormalizer } from '../etl/transform/DataNormalizer';
 import { InMemoryDataLoader } from '../etl/load/DataLoader';
 import { ArchiveStore } from '../etl/load/ArchiveStore';
@@ -117,10 +118,16 @@ export class InMemoryJobQueue {
       await this.updateJobProgress(jobId, 30);
 
       const archiveId = path.basename(job.data.zipPath);
-      const posts = (await adapter.extractPosts(job.data.zipPath)).map(post => ({
+      const extractedPosts = await adapter.extractPosts(job.data.zipPath);
+      const localPosts = adapter.platform === 'tiktok'
+        ? await new TikTokMediaDownloader().downloadOwnPostedVideos(extractedPosts, archiveId)
+        : extractedPosts;
+      const posts = localPosts.map(post => ({
         ...post,
         mediaUrls: post.mediaUrls?.map(
-          entry => `/api/media?archiveId=${encodeURIComponent(archiveId)}&entry=${encodeURIComponent(entry)}`
+          entry => entry.startsWith('/api/media?')
+            ? entry
+            : `/api/media?archiveId=${encodeURIComponent(archiveId)}&entry=${encodeURIComponent(entry)}`
         ),
       }));
       job.totalPosts = posts.length;
@@ -139,6 +146,7 @@ export class InMemoryJobQueue {
       const likes = await adapter.extractLikes(job.data.zipPath);
       await this.updateJobProgress(jobId, 70);
 
+      const comments = await adapter.extractComments(job.data.zipPath);
       await this.updateJobProgress(jobId, 80);
 
       const normalizedData = DataNormalizer.normalizeAll({
@@ -146,6 +154,7 @@ export class InMemoryJobQueue {
         users,
         followRelations,
         likes,
+        comments,
       });
       normalizedData.followRelations = normalizedData.followRelations.map(relation => ({
         ...relation,
@@ -163,6 +172,7 @@ export class InMemoryJobQueue {
       await this.dataLoader.saveUsers(normalizedData.users);
       await this.dataLoader.saveFollowRelations(normalizedData.followRelations);
       await this.dataLoader.saveLikes(normalizedData.likes);
+      await this.dataLoader.saveComments(normalizedData.comments);
       await this.dataLoader.disconnect();
 
       await this.archiveStore.save({
@@ -179,6 +189,7 @@ export class InMemoryJobQueue {
           .map(relation => relation.followingId))],
         posts: normalizedData.posts,
         likes: normalizedData.likes,
+        comments: normalizedData.comments,
       });
 
       const importedPostKeys = new Set(

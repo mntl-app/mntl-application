@@ -687,6 +687,10 @@
                     <button class="summary-tab" data-summary-tab="selectedFollowing">Selected following</button>
                     <button class="summary-tab" data-summary-tab="followingMatches">Matched following</button>
                     <button class="summary-tab" data-summary-tab="followerMatches">Matched followers</button>
+                    <button class="summary-tab" data-summary-tab="importedLikes">Imported likes</button>
+                    <button class="summary-tab" data-summary-tab="comments">Comments</button>
+                    <button class="summary-tab" data-summary-tab="yourLikeMatches">Your likes on their posts</button>
+                    <button class="summary-tab" data-summary-tab="sharedPostInteractions">Matched activity</button>
                     <button class="summary-tab" data-summary-tab="likeMatches">Matched likes</button>
                 </div>
                 <section class="summary-panel" id="selectedPosts">
@@ -712,6 +716,22 @@
                 <section class="summary-panel" id="followerMatches" hidden>
                     <h3>Selected followers with matching saved archives</h3>
                     <div class="data-list" id="followerMatchesList"></div>
+                </section>
+                <section class="summary-panel" id="importedLikes" hidden>
+                    <h3>Likes in this archive</h3>
+                    <div class="data-list" id="importedLikesList"></div>
+                </section>
+                <section class="summary-panel" id="comments" hidden>
+                    <h3>Comments in this archive</h3>
+                    <div class="data-list" id="commentsList"></div>
+                </section>
+                <section class="summary-panel" id="yourLikeMatches" hidden>
+                    <h3>Your likes matched to another account's selected posts</h3>
+                    <div class="data-list" id="yourLikeMatchesList"></div>
+                </section>
+                <section class="summary-panel" id="sharedPostInteractions" hidden>
+                    <h3>Both accounts interacted with the same post</h3>
+                    <div class="data-list" id="sharedPostInteractionsList"></div>
                 </section>
                 <section class="summary-panel" id="likeMatches" hidden>
                     <h3>Likes matched to your selected posts</h3>
@@ -1057,7 +1077,17 @@
                 if (!summaryResponse.ok) {
                     throw new Error(archiveSummary.error || 'Failed to load archive summary');
                 }
-                renderMigrationSummary(data.comparisons, archiveSummary);
+                const [likesResponse, commentsResponse] = await Promise.all([
+                    fetch(`/api/data/likes?archiveId=${encodeURIComponent(currentArchiveId)}`),
+                    fetch(`/api/data/comments?archiveId=${encodeURIComponent(currentArchiveId)}`),
+                ]);
+                const [likesData, commentsData] = await Promise.all([
+                    likesResponse.json(),
+                    commentsResponse.json(),
+                ]);
+                if (!likesResponse.ok) throw new Error(likesData.error || 'Failed to load likes');
+                if (!commentsResponse.ok) throw new Error(commentsData.error || 'Failed to load comments');
+                renderMigrationSummary(data.comparisons, archiveSummary, likesData.likes, commentsData.comments);
                 await goToWizardStep('summaryStep');
             } catch (error) {
                 showError(error.message);
@@ -1354,7 +1384,7 @@
             }).join('')}</div>`;
         }
 
-        function renderMigrationSummary(comparisons, archiveSummary) {
+        function renderMigrationSummary(comparisons, archiveSummary, importedLikes, comments) {
             const displayableComparisons = comparisons.filter(comparison =>
                 comparison.platform !== 'x' || comparison.ownerHandle
             );
@@ -1380,6 +1410,18 @@
                     }))
                     : []
             );
+            const yourLikeMatches = displayableComparisons.flatMap(comparison =>
+                comparison.likesOnTheirPosts.map(like => ({
+                    ...like,
+                    account: comparison.ownerHandle || comparison.ownerId,
+                }))
+            );
+            const sharedPostInteractions = displayableComparisons.flatMap(comparison =>
+                comparison.sharedPostInteractions.map(interaction => ({
+                    ...interaction,
+                    account: comparison.ownerHandle || comparison.ownerId,
+                }))
+            );
             const selectedReels = selectedPosts.filter(post => post.postType === 'reel').length;
             const selectedTextPosts = selectedPosts.filter(post => post.postType === 'text').length;
             const hiddenSelectedFollowers = archiveSummary.platform === 'x'
@@ -1396,6 +1438,10 @@
                 ['Selected replies', selectedReplies.length],
                 ['Selected followers', selectedFollowers.length],
                 ['Selected following', selectedFollowing.length],
+                ['Imported likes', importedLikes.length],
+                ['Imported comments', comments.length],
+                ['Your likes matched to their posts', yourLikeMatches.length],
+                ['Matched post activity', sharedPostInteractions.length],
                 ['Matched likes', matchingLikes.length],
             ].map(([label, count]) => `
                 <div class="summary-count"><strong>${count}</strong><span>${label}</span></div>
@@ -1458,6 +1504,57 @@
 
             document.getElementById('followingMatchesList').innerHTML = renderAccountMatches(matchingFollowing);
             document.getElementById('followerMatchesList').innerHTML = renderAccountMatches(matchingFollowers);
+            document.getElementById('importedLikesList').innerHTML = importedLikes.length
+                ? importedLikes.map(like => `
+                    <article class="data-item">
+                        <div class="data-item-header">
+                            <span class="data-item-platform">${escapeHtml(like.platform)}</span>
+                            <span class="data-item-date">${like.likedAt ? new Date(like.likedAt).toLocaleDateString() : 'Unknown date'}</span>
+                        </div>
+                        <div class="data-item-content">Liked post ID: <strong>${escapeHtml(like.postId)}</strong></div>
+                        ${like.postText ? `<div class="data-item-content">${escapeHtml(like.postText)}</div>` : ''}
+                        ${like.postUrl ? `<div class="data-item-content">Post URL: ${escapeHtml(like.postUrl)}</div>` : ''}
+                    </article>
+                `).join('')
+                : '<div class="no-data">No likes were included in this archive.</div>';
+            document.getElementById('commentsList').innerHTML = comments.length
+                ? comments.map(comment => `
+                    <article class="data-item">
+                        <div class="data-item-header">
+                            <span class="data-item-platform">${escapeHtml(comment.platform)}</span>
+                            <span class="data-item-date">${new Date(comment.createdAt).toLocaleDateString()}</span>
+                        </div>
+                        <div class="data-item-content">${escapeHtml(comment.content)}</div>
+                        <div class="data-item-metrics">
+                            <span class="data-item-metric">Comment ID: ${escapeHtml(comment.originalPlatformId)}</span>
+                            <span class="data-item-metric">Post ID: ${escapeHtml(comment.postId)}</span>
+                            <span class="data-item-metric">By: ${escapeHtml(comment.userId)}</span>
+                        </div>
+                        ${comment.postUrl ? `<div class="data-item-content">Post URL: ${escapeHtml(comment.postUrl)}</div>` : ''}
+                    </article>
+                `).join('')
+                : '<div class="no-data">No comments were included in this archive.</div>';
+            document.getElementById('yourLikeMatchesList').innerHTML = yourLikeMatches.length
+                ? yourLikeMatches.map(like => `
+                    <article class="data-item">
+                        <div class="data-item-content">You liked a post in <strong>@${escapeHtml(like.account)}</strong>'s archive</div>
+                        <div class="data-item-content">${escapeHtml(like.postCaption || `Post ID: ${like.postId}`)}</div>
+                        <div class="data-item-date">Matched by ${escapeHtml(like.matchType)}</div>
+                    </article>
+                `).join('')
+                : '<div class="no-data">No likes matched the other account’s selected posts by post ID or unique caption.</div>';
+            document.getElementById('sharedPostInteractionsList').innerHTML = sharedPostInteractions.length
+                ? sharedPostInteractions.map(match => `
+                    <article class="data-item">
+                        <div class="data-item-content">TikTok post ID: <strong>${escapeHtml(match.postId)}</strong></div>
+                        <div class="data-item-content">You: ${match.current.map(renderInteraction).join('; ')}</div>
+                        <div class="data-item-content">@${escapeHtml(match.account)}: ${match.other.map(renderInteraction).join('; ')}</div>
+                        ${[...match.current, ...match.other].find(interaction => interaction.postUrl)?.postUrl
+                            ? `<div class="data-item-content">Post URL: ${escapeHtml([...match.current, ...match.other].find(interaction => interaction.postUrl).postUrl)}</div>`
+                            : ''}
+                    </article>
+                `).join('')
+                : '<div class="no-data">No likes or comments from both archives point to the same post ID.</div>';
             document.getElementById('likeMatchesList').innerHTML = matchingLikes.length
                 ? matchingLikes.map(like => `
                     <article class="data-item">
@@ -1469,6 +1566,11 @@
                     </article>
                 `).join('')
                 : '<div class="no-data">No selected posts have likes matched to a saved account that followed you. The archive data remains stored for future comparisons.</div>';
+        }
+
+        function renderInteraction(interaction) {
+            const kind = interaction.type === 'like' ? 'liked' : `commented: “${escapeHtml(interaction.content || '')}”`;
+            return `${kind}${interaction.occurredAt ? ` (${new Date(interaction.occurredAt).toLocaleDateString()})` : ''}`;
         }
 
         function renderAccountMatches(comparisons) {
