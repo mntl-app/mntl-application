@@ -411,6 +411,37 @@
             margin: 16px 0;
         }
 
+        .summary-counts {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+            gap: 12px;
+            margin: 20px 0;
+        }
+
+        .summary-count {
+            background: #f6f7fb;
+            border-radius: 8px;
+            padding: 14px;
+            text-align: center;
+        }
+
+        .summary-count strong {
+            display: block;
+            color: #667eea;
+            font-size: 22px;
+        }
+
+        .summary-count span {
+            color: #666;
+            font-size: 12px;
+        }
+
+        .available-platforms {
+            color: #666;
+            font-size: 13px;
+            margin: 12px 0;
+        }
+
         .summary-tab {
             padding: 10px 12px;
             border: 0;
@@ -537,7 +568,7 @@
         <div class="upload-area" id="uploadArea">
             <div class="upload-icon">📁</div>
             <div class="upload-text">Drop your ZIP archive here or click to browse</div>
-            <div class="upload-hint">Supported: Instagram, Facebook, X, TikTok archives</div>
+            <div class="upload-hint" id="uploadHint">Supported: Instagram, Facebook, X, TikTok archives</div>
             <input type="file" id="fileInput" accept=".zip">
         </div>
 
@@ -600,7 +631,7 @@
                 <div class="wizard-heading">
                     <div class="wizard-progress">Step 2 of 3</div>
                     <h2>Choose your followers</h2>
-                    <p class="subtitle">Search and select the people who followed you on Instagram. All are included by default.</p>
+                    <p class="subtitle">Search and select the people who followed you on this platform. All are included by default.</p>
                 </div>
                 <div class="selection-toolbar">
                     <input type="search" id="followersSearch" placeholder="Search followers" aria-label="Search followers">
@@ -618,7 +649,7 @@
                 <div class="wizard-heading">
                     <div class="wizard-progress">Step 3 of 3</div>
                     <h2>Choose accounts you follow</h2>
-                    <p class="subtitle">Search and select the accounts you followed on Instagram. All are included by default.</p>
+                    <p class="subtitle">Search and select the accounts you followed on this platform. All are included by default.</p>
                 </div>
                 <div class="selection-toolbar">
                     <input type="search" id="followingSearch" placeholder="Search following" aria-label="Search following">
@@ -628,36 +659,67 @@
                 <div class="data-list" id="followingList"></div>
                 <div class="wizard-navigation">
                     <button class="btn btn-secondary" data-wizard-back="followers">Back: followers</button>
-                    <button class="btn" id="finishWizardBtn">Finish and see matches</button>
+                    <button class="btn" id="finishWizardBtn">Review your selections</button>
                 </div>
             </section>
 
             <section class="wizard-page" id="summaryStep" hidden>
                 <div class="comparison-heading">
                     <div class="wizard-progress">Your migration summary</div>
-                    <h2>Matches from saved archives</h2>
-                    <p class="subtitle">Unmatched followers, following, posts, and likes remain in your archive for future comparisons.</p>
+                    <h2>Review your migration selection</h2>
+                    <p class="subtitle">Check the exact posts, followers, following, and like matches selected for your migration.</p>
                 </div>
                 <div class="migration-notice">These are identified matches only. This app does not connect to MNTL or automatically apply follows or transfer likes.</div>
+                <div class="summary-counts" id="selectionCounts"></div>
                 <div class="summary-tabs">
-                    <button class="summary-tab active" data-summary-tab="followingMatches">People you followed</button>
-                    <button class="summary-tab" data-summary-tab="followerMatches">People who followed you</button>
-                    <button class="summary-tab" data-summary-tab="likeMatches">Likes on your posts</button>
+                    <button class="summary-tab active" data-summary-tab="selectedPosts">Selected posts</button>
+                    <button class="summary-tab" data-summary-tab="selectedFollowers">Selected followers</button>
+                    <button class="summary-tab" data-summary-tab="selectedFollowing">Selected following</button>
+                    <button class="summary-tab" data-summary-tab="followingMatches">Matched following</button>
+                    <button class="summary-tab" data-summary-tab="followerMatches">Matched followers</button>
+                    <button class="summary-tab" data-summary-tab="likeMatches">Matched likes</button>
                 </div>
-                <section class="summary-panel" id="followingMatches">
-                    <h3>These people you followed on Instagram have matching saved archives</h3>
+                <section class="summary-panel" id="selectedPosts">
+                    <h3>Posts selected for migration</h3>
+                    <div class="data-list" id="selectedPostsList"></div>
+                </section>
+                <section class="summary-panel" id="selectedFollowers" hidden>
+                    <h3>Followers selected for migration</h3>
+                    <div class="data-list" id="selectedFollowersList"></div>
+                </section>
+                <section class="summary-panel" id="selectedFollowing" hidden>
+                    <h3>Accounts selected to follow</h3>
+                    <div class="data-list" id="selectedFollowingList"></div>
+                </section>
+                <section class="summary-panel" id="followingMatches" hidden>
+                    <h3>Selected accounts you followed with matching saved archives</h3>
                     <div class="data-list" id="followingMatchesList"></div>
                 </section>
                 <section class="summary-panel" id="followerMatches" hidden>
-                    <h3>These people who followed you on Instagram have matching saved archives</h3>
+                    <h3>Selected followers with matching saved archives</h3>
                     <div class="data-list" id="followerMatchesList"></div>
                 </section>
                 <section class="summary-panel" id="likeMatches" hidden>
-                    <h3>These posts were liked by matched people who followed you on Instagram</h3>
+                    <h3>Likes matched to your selected posts</h3>
                     <div class="data-list" id="likeMatchesList"></div>
                 </section>
                 <div class="wizard-navigation">
                     <button class="btn btn-secondary" id="summaryBackBtn">Back: following</button>
+                    <button class="btn" id="confirmMigrationBtn">Confirm selection and save</button>
+                </div>
+            </section>
+
+            <section class="wizard-page" id="completeStep" hidden>
+                <div class="comparison-heading">
+                    <div class="wizard-progress">Migration complete</div>
+                    <h2 id="completionGreeting">Migration completed successfully!</h2>
+                    <p class="subtitle">Your selections have been saved. This tool prepares your archive migration but does not directly apply follows or likes to MNTL.</p>
+                </div>
+                <div class="migration-notice">Would you like to upload another archive? Platforms already uploaded in this browser flow are excluded.</div>
+                <p class="available-platforms" id="availablePlatforms"></p>
+                <div class="wizard-navigation">
+                    <button class="btn btn-secondary" id="finishMigrationBtn">No, finish</button>
+                    <button class="btn" id="uploadAnotherBtn">Yes, upload another archive</button>
                 </div>
             </section>
         </div>
@@ -683,10 +745,17 @@
         let selectedFile = null;
         let currentJobId = null;
         let currentArchiveId = null;
+        let currentPlatform = null;
         let progressInterval = null;
         let currentSelection = null;
         let selectionCatalog = { postIds: [], followers: [], following: [] };
         let selectionSavePromise = Promise.resolve();
+        const uploadedPlatformStorageKey = 'mntl-migration-uploaded-platforms';
+        let uploadedPlatforms = new Set();
+        let supportedPlatforms = [];
+        let serverInstanceId = null;
+
+        updateAvailablePlatforms();
 
         uploadArea.addEventListener('click', () => fileInput.click());
 
@@ -746,6 +815,8 @@
             const formData = new FormData();
             formData.append('archive', selectedFile);
             formData.append('userId', 'web-user');
+            formData.append('uploadedPlatforms', JSON.stringify([...uploadedPlatforms]));
+            formData.append('serverInstanceId', serverInstanceId || '');
 
             try {
                 const response = await fetch('/api/upload', {
@@ -761,6 +832,10 @@
 
                 currentJobId = data.jobId;
                 currentArchiveId = data.archiveId;
+                currentPlatform = data.platform;
+                uploadedPlatforms.add(data.platform);
+                sessionStorage.setItem(getUploadedPlatformStorageKey(), JSON.stringify([...uploadedPlatforms]));
+                renderAvailablePlatforms();
                 currentSelection = null;
                 selectionCatalog = { postIds: [], followers: [], following: [] };
                 Object.keys(loadedTabData).forEach(tab => delete loadedTabData[tab]);
@@ -801,8 +876,14 @@
                         uploadBtn.textContent = 'Upload & Process';
 
                         if (data.status === 'completed') {
-                            showSuccess('Migration completed successfully!');
+                            uploadedPlatforms.add(currentPlatform);
+                            sessionStorage.setItem(uploadedPlatformStorageKey, JSON.stringify([...uploadedPlatforms]));
+                            renderAvailablePlatforms();
+                            showSuccess('Archive processed. Review and confirm your selections to complete migration.');
                             progressSection.classList.remove('show');
+                            uploadArea.hidden = true;
+                            fileInfo.classList.remove('show');
+                            uploadBtn.hidden = true;
                             document.getElementById('resultsSection').classList.add('show');
                             currentSelection = null;
                             selectionCatalog = { postIds: [], followers: [], following: [] };
@@ -851,6 +932,55 @@
             successMessage.classList.remove('show');
         }
 
+        async function updateAvailablePlatforms() {
+            try {
+                const response = await fetch('/api/session');
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Failed to load platforms');
+                supportedPlatforms = data.platforms;
+                if (serverInstanceId !== data.serverInstanceId) {
+                    serverInstanceId = data.serverInstanceId;
+                    uploadedPlatforms = new Set(JSON.parse(
+                        sessionStorage.getItem(getUploadedPlatformStorageKey()) || '[]'
+                    ));
+                }
+                renderAvailablePlatforms();
+            } catch (error) {
+                showError(error.message);
+            }
+        }
+
+        function getUploadedPlatformStorageKey() {
+            return `${uploadedPlatformStorageKey}:${serverInstanceId || 'uninitialized'}`;
+        }
+
+        function renderAvailablePlatforms() {
+            const available = supportedPlatforms.filter(platform => !uploadedPlatforms.has(platform));
+            const label = available.length
+                ? `Available platforms: ${available.join(', ')}`
+                : 'All supported platforms have already been uploaded in this browser flow.';
+            document.getElementById('uploadHint').textContent = label;
+            document.getElementById('availablePlatforms').textContent = label;
+            document.getElementById('uploadAnotherBtn').hidden = available.length === 0;
+        }
+
+        function resetForAnotherUpload() {
+            selectedFile = null;
+            fileInput.value = '';
+            fileInfo.classList.remove('show');
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = 'Upload & Process';
+            uploadArea.hidden = false;
+            uploadBtn.hidden = false;
+            progressSection.classList.remove('show');
+            document.getElementById('resultsSection').classList.remove('show');
+            document.getElementById('completeStep').hidden = true;
+            hideError();
+            hideSuccess();
+            updateAvailablePlatforms();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
         const loadedTabData = {};
         const wizardDataTabs = {
             postsStep: 'posts',
@@ -895,7 +1025,7 @@
         document.getElementById('finishWizardBtn').addEventListener('click', async event => {
             const button = event.currentTarget;
             button.disabled = true;
-            button.textContent = 'Saving selections and finding matches...';
+            button.textContent = 'Saving selections and preparing summary...';
             try {
                 await queueSelectionSave();
                 const response = await fetch('/api/compare', {
@@ -905,17 +1035,55 @@
                 });
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.error || 'Comparison failed');
-                renderMigrationSummary(data.comparisons);
+                const summaryResponse = await fetch(`/api/data/summary?archiveId=${encodeURIComponent(currentArchiveId)}`);
+                const archiveSummary = await summaryResponse.json();
+                if (!summaryResponse.ok) {
+                    throw new Error(archiveSummary.error || 'Failed to load archive summary');
+                }
+                renderMigrationSummary(data.comparisons, archiveSummary);
                 await goToWizardStep('summaryStep');
             } catch (error) {
                 showError(error.message);
             } finally {
                 button.disabled = false;
-                button.textContent = 'Finish and see matches';
+                button.textContent = 'Review your selections';
             }
         });
 
         document.getElementById('summaryBackBtn').addEventListener('click', () => goToWizardStep('followingStep'));
+
+        document.getElementById('confirmMigrationBtn').addEventListener('click', async event => {
+            const button = event.currentTarget;
+            button.disabled = true;
+            button.textContent = 'Saving your confirmed selection...';
+            try {
+                await queueSelectionSave();
+                const response = await fetch(`/api/data/summary?archiveId=${encodeURIComponent(currentArchiveId)}`);
+                const archiveSummary = await response.json();
+                if (!response.ok) throw new Error(archiveSummary.error || 'Failed to confirm migration');
+
+                const ownerName = archiveSummary.ownerHandle
+                    ? `, @${archiveSummary.ownerHandle}`
+                    : '';
+                document.getElementById('completionGreeting').textContent =
+                    `Migration successfully completed${ownerName}!`;
+                renderAvailablePlatforms();
+                await goToWizardStep('completeStep');
+            } catch (error) {
+                showError(error.message);
+            } finally {
+                button.disabled = false;
+                button.textContent = 'Confirm selection and save';
+            }
+        });
+
+        document.getElementById('uploadAnotherBtn').addEventListener('click', resetForAnotherUpload);
+        document.getElementById('finishMigrationBtn').addEventListener('click', event => {
+            event.currentTarget.hidden = true;
+            document.getElementById('uploadAnotherBtn').hidden = true;
+            document.getElementById('availablePlatforms').textContent =
+                'Your confirmed selection is saved. You can close this page.';
+        });
 
         document.querySelectorAll('[data-summary-tab]').forEach(button => {
             button.addEventListener('click', () => {
@@ -957,11 +1125,14 @@
                 selectionCatalog.postIds = data.posts.map(post => post.originalPlatformId);
             } else if (tab === 'followers' || tab === 'following') {
                 const key = tab === 'followers' ? 'followerId' : 'followingId';
-                selectionCatalog[tab] = data.followRelations.map(relation => relation[key]);
+                selectionCatalog[tab] = data.selectionCatalog?.[tab] ||
+                    data.followRelations.map(relation => relation[key]);
             }
 
             if (data.count === 0) {
-                listElement.innerHTML = '<div class="no-data">No data available</div>';
+                listElement.innerHTML = data.hiddenCount > 0
+                    ? '<div class="no-data">No matching accounts with known X handles yet. Unmatched accounts are saved for future matching.</div>'
+                    : '<div class="no-data">No data available</div>';
                 return;
             }
 
@@ -970,6 +1141,10 @@
                           data.likes;
 
             listElement.innerHTML = items.map(item => renderItem(tab, item)).join('');
+            if (data.hiddenCount > 0) {
+                listElement.insertAdjacentHTML('beforeend',
+                    '<div class="no-data">Other X accounts are hidden until an archive with a matching handle is uploaded.</div>');
+            }
             filterSelectionRows(tab);
         }
 
@@ -980,6 +1155,7 @@
                         <div class="data-item">
                             <div class="data-item-header">
                                 <span class="data-item-platform">${escapeHtml(item.platform)}</span>
+                                ${renderPostTypeBadge(item)}
                                 <span class="data-item-date">${new Date(item.createdAt).toLocaleDateString()}</span>
                             </div>
                             <div class="data-item-metrics">
@@ -990,26 +1166,28 @@
                         </div>
                     `);
                 case 'followers':
-                    return renderSelectionRow('followers', item.followerId, item.followerId, `
+                    if (item.platform === 'x' && !item.accountHandle) return '';
+                    return renderSelectionRow('followers', item.followerId, item.accountHandle || item.followerId, `
                         <div class="data-item">
                             <div class="data-item-header">
                                 <span class="data-item-platform">${escapeHtml(item.platform)}</span>
                                 <span class="data-item-date">${item.followedAt ? new Date(item.followedAt).toLocaleDateString() : 'Unknown date'}</span>
                             </div>
                             <div class="data-item-content">
-                                <strong>${escapeHtml(item.followerId)}</strong> follows you
+                                <strong>${item.platform === 'x' ? `@${escapeHtml(item.accountHandle)}` : escapeHtml(item.followerId)}</strong> follows you
                             </div>
                         </div>
                     `);
                 case 'following':
-                    return renderSelectionRow('following', item.followingId, item.followingId, `
+                    if (item.platform === 'x' && !item.accountHandle) return '';
+                    return renderSelectionRow('following', item.followingId, item.accountHandle || item.followingId, `
                         <div class="data-item">
                             <div class="data-item-header">
                                 <span class="data-item-platform">${escapeHtml(item.platform)}</span>
                                 <span class="data-item-date">${item.followedAt ? new Date(item.followedAt).toLocaleDateString() : 'Unknown date'}</span>
                             </div>
                             <div class="data-item-content">
-                                You follow <strong>${escapeHtml(item.followingId)}</strong>
+                                You follow <strong>${item.platform === 'x' ? `@${escapeHtml(item.accountHandle)}` : escapeHtml(item.followingId)}</strong>
                             </div>
                         </div>
                     `);
@@ -1124,6 +1302,13 @@
             })[character]);
         }
 
+        function renderPostTypeBadge(post) {
+            const postType = post.postType ||
+                (post.mediaTypes?.includes('video') ? 'reel' : post.mediaUrls?.length ? 'post' : 'text');
+            const label = postType === 'reel' ? 'Reel' : postType === 'text' ? 'Text post' : 'Post';
+            return `<span class="data-item-platform">${label}</span>`;
+        }
+
         function renderPostMedia(post) {
             if (!Array.isArray(post.mediaUrls) || post.mediaUrls.length === 0) return '';
 
@@ -1137,14 +1322,87 @@
             }).join('')}</div>`;
         }
 
-        function renderMigrationSummary(comparisons) {
-            const matchingFollowing = comparisons.filter(comparison => comparison.youFollowThem);
-            const matchingFollowers = comparisons.filter(comparison => comparison.theyFollowYou);
-            const matchingLikes = comparisons.flatMap(comparison =>
+        function renderMigrationSummary(comparisons, archiveSummary) {
+            const displayableComparisons = comparisons.filter(comparison =>
+                comparison.platform !== 'x' || comparison.ownerHandle
+            );
+            const selectedPosts = (loadedTabData.posts?.posts || []).filter(post =>
+                currentSelection.postIds.includes(post.originalPlatformId)
+            );
+            const selectedFollowers = (loadedTabData.followers?.followRelations || []).filter(relation =>
+                currentSelection.followers.includes(relation.followerId)
+            );
+            const selectedFollowing = (loadedTabData.following?.followRelations || []).filter(relation =>
+                currentSelection.following.includes(relation.followingId)
+            );
+            const matchingFollowing = displayableComparisons.filter(comparison => comparison.youFollowThem);
+            const matchingFollowers = displayableComparisons.filter(comparison => comparison.theyFollowYou);
+            const matchingLikes = displayableComparisons.flatMap(comparison =>
                 comparison.theyFollowYou
-                    ? comparison.theyLikeYourPosts.map(like => ({ ...like, liker: comparison.ownerId }))
+                    ? comparison.theyLikeYourPosts.map(like => ({
+                        ...like,
+                        liker: comparison.ownerHandle || comparison.ownerId,
+                    }))
                     : []
             );
+            const selectedReels = selectedPosts.filter(post => post.postType === 'reel').length;
+            const selectedTextPosts = selectedPosts.filter(post => post.postType === 'text').length;
+            const hiddenSelectedFollowers = archiveSummary.platform === 'x'
+                ? currentSelection.followers.length - selectedFollowers.length
+                : 0;
+            const hiddenSelectedFollowing = archiveSummary.platform === 'x'
+                ? currentSelection.following.length - selectedFollowing.length
+                : 0;
+
+            document.getElementById('selectionCounts').innerHTML = [
+                ['Selected posts', selectedPosts.length],
+                ['Including reels', selectedReels],
+                ['Text-only posts', selectedTextPosts],
+                ['Selected followers', selectedFollowers.length],
+                ['Selected following', selectedFollowing.length],
+                ['Matched likes', matchingLikes.length],
+            ].map(([label, count]) => `
+                <div class="summary-count"><strong>${count}</strong><span>${label}</span></div>
+            `).join('');
+
+            document.getElementById('selectedPostsList').innerHTML = selectedPosts.length
+                ? selectedPosts.map(post => `
+                    <article class="data-item">
+                        <div class="data-item-header">
+                            <span class="data-item-platform">${escapeHtml(post.platform)}</span>
+                            ${renderPostTypeBadge(post)}
+                            <span class="data-item-date">${new Date(post.createdAt).toLocaleDateString()}</span>
+                        </div>
+                        <div class="data-item-content"><strong>${escapeHtml(post.content || '(No caption)')}</strong></div>
+                        ${renderPostMedia(post)}
+                    </article>
+                `).join('')
+                : '<div class="no-data">No posts selected for migration.</div>';
+
+            document.getElementById('selectedFollowersList').innerHTML = selectedFollowers.length
+                ? selectedFollowers.map(relation => `
+                    <article class="data-item">
+                        <div class="data-item-content"><strong>${escapeHtml(relation.platform === 'x' ? `@${relation.accountHandle}` : relation.followerId)}</strong> follows you</div>
+                    </article>
+                `).join('') + (hiddenSelectedFollowers
+                    ? `<div class="no-data">${hiddenSelectedFollowers} unmatched X follower ID(s) are saved but hidden until an account archive identifies their handle.</div>`
+                    : '')
+                : `<div class="no-data">${hiddenSelectedFollowers
+                    ? `${hiddenSelectedFollowers} selected X follower ID(s) have no known handle yet, so they are hidden from this summary.`
+                    : 'No followers selected for migration.'}</div>`;
+
+            document.getElementById('selectedFollowingList').innerHTML = selectedFollowing.length
+                ? selectedFollowing.map(relation => `
+                    <article class="data-item">
+                        <div class="data-item-content">You follow <strong>${escapeHtml(relation.platform === 'x' ? `@${relation.accountHandle}` : relation.followingId)}</strong></div>
+                    </article>
+                `).join('') + (hiddenSelectedFollowing
+                    ? `<div class="no-data">${hiddenSelectedFollowing} unmatched X following ID(s) are saved but hidden until an account archive identifies their handle.</div>`
+                    : '')
+                : `<div class="no-data">${hiddenSelectedFollowing
+                    ? `${hiddenSelectedFollowing} selected X following ID(s) have no known handle yet, so they are hidden from this summary.`
+                    : 'No accounts selected to follow.'}</div>`;
+
             document.getElementById('followingMatchesList').innerHTML = renderAccountMatches(matchingFollowing);
             document.getElementById('followerMatchesList').innerHTML = renderAccountMatches(matchingFollowers);
             document.getElementById('likeMatchesList').innerHTML = matchingLikes.length
@@ -1152,6 +1410,7 @@
                     <article class="data-item">
                         <div class="data-item-content"><strong>@${escapeHtml(like.liker)}</strong> liked your post</div>
                         <div class="data-item-content">${escapeHtml(like.postCaption || `Post ID: ${like.postId}`)}</div>
+                        ${renderPostTypeBadge(like)}
                         ${renderPostMedia(like)}
                         <div class="data-item-date">Matched by ${escapeHtml(like.matchType)}</div>
                     </article>
@@ -1163,7 +1422,7 @@
             return comparisons.length
                 ? comparisons.map(comparison => `
                     <article class="data-item">
-                        <div class="data-item-content"><strong>@${escapeHtml(comparison.ownerId)}</strong> — matching uploaded archive found.</div>
+                        <div class="data-item-content"><strong>@${escapeHtml(comparison.ownerHandle || comparison.ownerId)}</strong> — matching uploaded archive found.</div>
                     </article>
                 `).join('')
                 : '<div class="no-data">No matches found yet. The original archive data remains stored and can be compared when more accounts join.</div>';

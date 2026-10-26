@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import AdmZip from 'adm-zip';
-import { mkdtempSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FacebookAdapter } from '../src/adapters/facebook/FacebookAdapter';
@@ -10,6 +17,7 @@ import { TikTokAdapter } from '../src/adapters/tiktok/TikTokAdapter';
 import { XAdapter } from '../src/adapters/x/XAdapter';
 import { ArchiveStore, compareArchives, StoredArchive } from '../src/etl/load/ArchiveStore';
 import { InMemoryDataLoader } from '../src/etl/load/DataLoader';
+import { clearDevelopmentArchives } from '../src/etl/load/DevelopmentArchiveCleanup';
 import { LikeSchema, PostSchema } from '../src/types/schemas';
 
 function createPost(originalPlatformId: string, content: string) {
@@ -29,6 +37,35 @@ function createLike(postId: string, postText?: string) {
     postText,
   });
 }
+
+test('clears stored archives and uploaded ZIPs only for development startup', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'development-archive-cleanup-test-'));
+  const uploads = join(directory, 'uploads');
+  const archives = join(directory, 'data', 'archives');
+  mkdirSync(uploads);
+  mkdirSync(archives, { recursive: true });
+  writeFileSync(join(uploads, 'a'.repeat(32)), 'uploaded ZIP');
+  writeFileSync(join(uploads, 'keep-me.txt'), 'unrelated upload file');
+  writeFileSync(join(archives, 'archive-1.json'), 'stored archive');
+  writeFileSync(join(archives, 'archive-1.json.123.tmp'), 'temporary archive');
+  writeFileSync(join(archives, 'keep-me.txt'), 'unrelated file');
+
+  try {
+    assert.equal(await clearDevelopmentArchives(directory, 'production'), 0);
+    assert.equal(existsSync(join(archives, 'archive-1.json')), true);
+
+    assert.equal(await clearDevelopmentArchives(directory, 'development'), 3);
+    assert.equal(existsSync(join(uploads, 'a'.repeat(32))), false);
+    assert.equal(existsSync(join(archives, 'archive-1.json')), false);
+    assert.equal(existsSync(join(archives, 'archive-1.json.123.tmp')), false);
+    assert.equal(readFileSync(join(uploads, 'keep-me.txt'), 'utf8'), 'unrelated upload file');
+    assert.equal(readFileSync(join(archives, 'keep-me.txt'), 'utf8'), 'unrelated file');
+    assert.equal(existsSync(uploads), true);
+    assert.equal(existsSync(archives), true);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test('resolves stored likes when a matching post arrives later by exact caption', async () => {
   const loader = new InMemoryDataLoader();
@@ -100,6 +137,101 @@ test('keeps Instagram liked-post FBIDs separate from URL shortcodes', async () =
   }
 });
 
+test('extracts X posts, media categories, followers, following, and likes', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'x-adapter-test-'));
+  const archivePath = join(directory, 'archive.zip');
+  const zip = new AdmZip();
+  zip.addFile(
+    'data/tweets.js',
+    Buffer.from(`window.YTD.tweets.part0 = ${JSON.stringify([
+      { tweet: {
+        id_str: 'tweet-photo',
+        created_at: 'Sat Oct 24 23:56:41 +0000 2026',
+        full_text: 'Photo with a caption',
+        entities: { media: [{ type: 'photo', media_url_https: 'https://pbs.twimg.com/media/photo.jpg' }] },
+      } },
+      { tweet: {
+        id_str: 'tweet-video',
+        created_at: 'Sat Oct 24 23:56:42 +0000 2026',
+        full_text: 'Video caption',
+        extended_entities: { media: [{ type: 'video', media_url_https: 'https://pbs.twimg.com/media/clip.mp4' }] },
+      } },
+      { tweet: {
+        id_str: 'tweet-text',
+        created_at: 'Sat Oct 24 23:56:43 +0000 2026',
+        full_text: 'Text-only [post]',
+      } },
+    ])};`)
+  );
+  zip.addFile('data/tweets_media/tweet-photo-photo.jpg', Buffer.from('photo'));
+  zip.addFile('data/tweets_media/tweet-video-clip.mp4', Buffer.from('video'));
+  zip.addFile(
+    'data/account.js',
+    Buffer.from(`window.YTD.account.part0 = ${JSON.stringify([{
+      account: {
+        accountId: 'owner-id',
+        username: 'owner',
+        accountDisplayName: 'Account Owner',
+        createdAt: '2020-07-22T13:26:29.641Z',
+      },
+    }])};`)
+  );
+  zip.addFile(
+    'data/follower.js',
+    Buffer.from(`window.YTD.follower.part0 = ${JSON.stringify([{ follower: { accountId: 'follower-id' } }])};`)
+  );
+  zip.addFile(
+    'data/following.js',
+    Buffer.from(`window.YTD.following.part0 = ${JSON.stringify([{ following: { accountId: 'following-id' } }])};`)
+  );
+  zip.addFile(
+    'data/like.js',
+    Buffer.from(`window.YTD.like.part0 = ${JSON.stringify([{
+      like: {
+        tweetId: 'liked-tweet-id',
+        fullText: 'A liked tweet',
+        expandedUrl: 'https://twitter.com/i/web/status/liked-tweet-id',
+      },
+    }])};`)
+  );
+  zip.writeZip(archivePath);
+
+  try {
+    const adapter = new XAdapter();
+    assert.equal(adapter.detect(zip.getEntries().map(entry => entry.entryName)), true);
+
+    const posts = await adapter.extractPosts(archivePath);
+    assert.equal(posts.length, 3);
+    assert.equal(posts[0].postType, 'post');
+    assert.deepEqual(posts[0].mediaUrls, ['data/tweets_media/tweet-photo-photo.jpg']);
+    assert.equal(posts[0].mediaTypes?.[0], 'image');
+    assert.equal(posts[1].postType, 'reel');
+    assert.deepEqual(posts[1].mediaUrls, ['data/tweets_media/tweet-video-clip.mp4']);
+    assert.equal(posts[1].mediaTypes?.[0], 'video');
+    assert.equal(posts[2].postType, 'text');
+    assert.equal(posts[2].content, 'Text-only [post]');
+
+    const [user] = await adapter.extractUsers(archivePath);
+    assert.equal(user.originalPlatformId, 'owner-id');
+    assert.equal(user.username, 'owner');
+    assert.equal(user.displayName, 'Account Owner');
+
+    const relations = await adapter.extractFollowRelations(archivePath);
+    assert.deepEqual(relations.map(relation => [relation.followerId, relation.followingId]), [
+      ['follower-id', 'me'],
+      ['me', 'following-id'],
+    ]);
+
+    const [like] = await adapter.extractLikes(archivePath);
+    assert.equal(like.userId, 'me');
+    assert.equal(like.postId, 'liked-tweet-id');
+    assert.equal(like.postText, 'A liked tweet');
+    assert.equal(like.postUrl, 'https://twitter.com/i/web/status/liked-tweet-id');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('joins carousel media records to posts with localized media and caption labels', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'instagram-carousel-test-'));
   const archivePath = join(directory, 'archive.zip');
@@ -139,12 +271,48 @@ test('joins carousel media records to posts with localized media and caption lab
   try {
     const [post] = await new InstagramAdapter().extractPosts(archivePath);
     assert.equal(post.originalPlatformId, 'post-fbid-carousel');
+    assert.equal(post.postType, 'post');
     assert.equal(post.content, 'An album caption');
     assert.deepEqual(post.mediaUrls, [
       'media/posts/cover.jpg',
       'media/posts/photo-2.jpg',
     ]);
     assert.deepEqual(post.mediaTypes, ['image', 'image']);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('extracts Instagram reels, captions, and bundled video media', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'instagram-reels-test-'));
+  const archivePath = join(directory, 'archive.zip');
+  const zip = new AdmZip();
+  zip.addFile(
+    'export/your_instagram_activity/media/reels.json',
+    Buffer.from(JSON.stringify({
+      ig_reels_media: [{
+        media: [{
+          uri: 'media/reels/202608/reel-101.mp4',
+          creation_timestamp: 1787862017,
+          title: 'A reel caption',
+          media_metadata: { video_metadata: {} },
+        }],
+      }],
+    }))
+  );
+  zip.addFile('export/media/reels/202608/reel-101.mp4', Buffer.from('reel-video'));
+  zip.addFile(
+    'export/__MACOSX/your_instagram_activity/media/._reels.json',
+    Buffer.from('not-json')
+  );
+  zip.writeZip(archivePath);
+
+  try {
+    const [reel] = await new InstagramAdapter().extractPosts(archivePath);
+    assert.equal(reel.postType, 'reel');
+    assert.equal(reel.content, 'A reel caption');
+    assert.deepEqual(reel.mediaUrls, ['media/reels/202608/reel-101.mp4']);
+    assert.deepEqual(reel.mediaTypes, ['video']);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -247,6 +415,62 @@ test('persists account archives and matches relationships and likes across accou
     assert.equal(comparison.theyLikeYourPosts[0].matchType, 'id');
     assert.deepEqual(comparison.theyLikeYourPosts[0].mediaUrls, ['/api/media?entry=alice-photo.jpg']);
     assert.deepEqual(comparison.theyLikeYourPosts[0].mediaTypes, ['image']);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('resolves known X account IDs to handles and exposes handles in archive comparisons', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'x-owner-handle-test-'));
+  const store = new ArchiveStore(directory);
+  const alice: StoredArchive = {
+    archiveId: 'alice-x',
+    ownerId: '1001',
+    ownerHandle: 'alice_handle',
+    platform: 'x',
+    importedAt: '2026-01-01T00:00:00.000Z',
+    followers: ['2002', 'unknown-id'],
+    following: ['2002'],
+    posts: [],
+    likes: [],
+  };
+  const bob: StoredArchive = {
+    archiveId: 'bob-x',
+    ownerId: '2002',
+    ownerHandle: '@bob_handle',
+    platform: 'x',
+    importedAt: '2026-01-02T00:00:00.000Z',
+    followers: ['1001'],
+    following: ['1001'],
+    posts: [],
+    likes: [],
+  };
+  const anotherPlatform: StoredArchive = {
+    archiveId: 'bob-instagram',
+    ownerId: '2002',
+    ownerHandle: 'wrong_platform_handle',
+    platform: 'instagram',
+    importedAt: '2026-01-03T00:00:00.000Z',
+    followers: [],
+    following: [],
+    posts: [],
+    likes: [],
+  };
+
+  try {
+    await store.save(alice);
+    await store.save(bob);
+    await store.save(anotherPlatform);
+
+    const knownHandles = [...(await store.getKnownOwnerHandles('x')).entries()]
+      .sort(([leftId], [rightId]) => leftId.localeCompare(rightId));
+    assert.deepEqual(knownHandles, [
+      ['1001', 'alice_handle'],
+      ['2002', 'bob_handle'],
+    ]);
+    const [comparison] = await store.compare('alice-x');
+    assert.equal(comparison.ownerId, '2002');
+    assert.equal(comparison.ownerHandle, 'bob_handle');
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

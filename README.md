@@ -110,6 +110,11 @@ The server will start on port 3000 (or the port specified in `.env`).
 
 ### Development Mode (Default)
 The tool uses an in-memory queue by default. This requires no external dependencies and is perfect for development and testing.
+git stat
+When `NODE_ENV=development`, each server startup clears app-managed uploaded
+archives in `uploads/` and stored archive JSON/temp files in `data/archives/`.
+This keeps development runs ready for a fresh import. Other files and all
+archive data in non-development environments are left untouched.
 
 ### Production Mode (with Redis)
 For production environments with multiple workers, use BullMQ with Redis:
@@ -220,9 +225,11 @@ After an archive is processed, the web app guides the user through a three-step
 selection wizard: posts (with captions and media), followers, then following.
 Follower and following lists can be searched. All items are selected by default,
 and each step saves changes to the archive's JSON file before continuing.
-The final summary has separate views for matched followed accounts, matched
-followers, and likes on selected posts from matched followers. Comments are not
-included in migration comparisons.
+The review page lists the selected posts and media, selected followers and
+following, and matching accounts and likes. The user confirms the selection to
+save it and complete the flow. They can then upload another platform archive;
+platforms already uploaded in the same browser tab are excluded from that flow.
+Comments are not included in migration comparisons.
 
 Comparisons use archives uploaded to this local tool; an uploaded archive is not
 proof that its owner has joined MNTL. The app has no MNTL integration and does
@@ -267,6 +274,7 @@ Get list of supported platforms.
 {
   originalPlatformId: string;
   platform: 'instagram' | 'facebook' | 'x' | 'tiktok';
+  postType?: 'post' | 'reel' | 'text';
   content?: string;
   mediaUrls?: string[];
   mediaTypes?: ('image' | 'video' | 'none')[];
@@ -306,7 +314,7 @@ Get list of supported platforms.
 
 ### Instagram
 - Detects Instagram-specific archive paths rather than generic names such as `posts`
-- Parses post captions, stable platform identifiers, liked-post URLs/captions, and both array/object follow-list exports
+- Parses regular posts and reels, including captions, stable platform identifiers, liked-post URLs/captions, and both array/object follow-list exports
 - Joins album photos from split Instagram `posts*.json` export files to their parent post
 - Handles media files in `media/` folder, including ZIPs with a top-level export directory
 - Existing saved archives should be uploaded again to refresh their stored album media after upgrading
@@ -320,8 +328,11 @@ Get list of supported platforms.
 ### X (Twitter)
 - Detects Twitter-specific archive paths or `tweets.js` files, not generic `data` filenames
 - Strips JavaScript wrapper from `.js` files (e.g., `window.YTD.tweets.part0 = [...]`)
-- Parses tweet data with extended entities for media
-- Handles replies as comments
+- Imports tweets, follower/following account IDs, and liked tweet IDs from standard X archive files
+- Shows X follower/following handles only when a matching account archive is stored; unknown IDs stay saved but hidden
+- Maps photo tweets to regular posts, video tweets to reels, and text-only tweets to text posts
+- Serves photo and video files from the uploaded archive when present
+- Uses exported account IDs for followers and following, and tweet IDs for likes
 
 ### TikTok
 - Detects TikTok-specific archive paths or `user_data` exports rather than generic `video` filenames

@@ -1,11 +1,17 @@
 import 'dotenv/config';
-import { app } from './api/server';
-import { InMemoryJobQueue } from './queue/InMemoryJobQueue';
+import { clearDevelopmentArchives } from './etl/load/DevelopmentArchiveCleanup';
 
 const PORT = process.env.PORT || 3000;
 
 async function startServer() {
   try {
+    if (process.env.NODE_ENV === 'development') {
+      const removedCount = await clearDevelopmentArchives();
+      console.log(`Development startup cleared ${removedCount} stored archive file(s)`);
+    }
+
+    const { app } = await import('./api/server');
+    const { InMemoryJobQueue } = await import('./queue/InMemoryJobQueue');
     const jobQueue = InMemoryJobQueue.getInstance();
 
     app.listen(PORT, () => {

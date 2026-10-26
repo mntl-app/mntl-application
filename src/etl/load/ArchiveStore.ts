@@ -9,6 +9,7 @@ import {
 export interface StoredArchive {
   archiveId: string;
   ownerId: string;
+  ownerHandle?: string;
   platform: Platform;
   importedAt: string;
   followers: string[];
@@ -27,6 +28,7 @@ export interface ArchiveSelection {
 export interface ArchiveComparison {
   archiveId: string;
   ownerId: string;
+  ownerHandle?: string;
   platform: Platform;
   follows: 'following' | 'follower' | 'mutual' | null;
   youFollowThem: boolean;
@@ -38,6 +40,7 @@ export interface ArchiveComparison {
     postCaption?: string;
     mediaUrls?: string[];
     mediaTypes?: NormalizedPost['mediaTypes'];
+    postType?: NormalizedPost['postType'];
     matchType: 'id' | 'shortcode' | 'text';
     likedAt?: Date;
   }>;
@@ -46,6 +49,7 @@ export interface ArchiveComparison {
     postCaption?: string;
     mediaUrls?: string[];
     mediaTypes?: NormalizedPost['mediaTypes'];
+    postType?: NormalizedPost['postType'];
     matchType: 'id' | 'shortcode' | 'text';
     likedAt?: Date;
   }>;
@@ -145,6 +149,7 @@ export function compareArchives(
             postCaption: match.post.content,
             mediaUrls: match.post.mediaUrls,
             mediaTypes: match.post.mediaTypes,
+            postType: match.post.postType,
             matchType: match.matchType,
             likedAt: like.likedAt,
           }]
@@ -153,6 +158,7 @@ export function compareArchives(
   return {
     archiveId: other.archiveId,
     ownerId: other.ownerId,
+    ownerHandle: other.ownerHandle?.trim().replace(/^@/, ''),
     platform: other.platform,
     youFollowThem: currentFollowsOther,
     theyFollowYou: otherFollowsCurrent,
@@ -250,6 +256,17 @@ export class ArchiveStore {
       })
     );
     return archives.sort((left, right) => right.importedAt.localeCompare(left.importedAt));
+  }
+
+  async getKnownOwnerHandles(platform: Platform): Promise<Map<string, string>> {
+    const handles = new Map<string, string>();
+    for (const archive of await this.list()) {
+      const handle = archive.ownerHandle?.trim().replace(/^@/, '');
+      if (archive.platform === platform && handle && !handles.has(archive.ownerId)) {
+        handles.set(archive.ownerId, handle);
+      }
+    }
+    return handles;
   }
 
   async saveSelection(archiveId: string, selection: ArchiveSelection): Promise<StoredArchive> {

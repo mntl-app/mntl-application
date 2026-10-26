@@ -121,7 +121,10 @@ export class JobQueue {
       await job.updateProgress({ ...currentProgress, totalPosts: posts.length, processedPosts: 0 });
 
       const users = await adapter.extractUsers(zipPath);
-      const archiveOwnerId = users.find(user => user.username !== 'unknown')?.username || userId;
+      const archiveOwner = users.find(user => user.username !== 'unknown');
+      const archiveOwnerId = adapter.platform === 'x'
+        ? archiveOwner?.originalPlatformId || userId
+        : archiveOwner?.username || userId;
       await job.updateProgress(40);
 
       const followRelations = await adapter.extractFollowRelations(zipPath);
@@ -159,6 +162,7 @@ export class JobQueue {
       await this.archiveStore.save({
         archiveId,
         ownerId: archiveOwnerId,
+        ownerHandle: archiveOwner?.username,
         platform: adapter.platform,
         importedAt: new Date().toISOString(),
         followers: [...new Set(normalizedData.followRelations

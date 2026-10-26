@@ -43,13 +43,27 @@ export class InstagramAdapter extends BaseAdapter {
     try {
       const entries = zip.getEntries();
       const postFiles = entries.filter(entry =>
-        entry.entryName.includes('your_instagram_activity/media/posts') &&
-        entry.entryName.endsWith('.json')
+        /your_instagram_activity\/media\/posts(?:_\d+)?\.json$/i.test(entry.entryName.replace(/\\/g, '/')) &&
+        !entry.entryName.includes('/__MACOSX/') &&
+        !path.basename(entry.entryName).startsWith('._')
       );
       const postRecords = postFiles.flatMap(entry => {
         const content = entry.getData().toString('utf8');
         const data = JSON.parse(content);
         return Array.isArray(data) ? data : [];
+      });
+      const reelFiles = entries.filter(entry =>
+        /your_instagram_activity\/media\/reels(?:_\d+)?\.json$/i.test(entry.entryName.replace(/\\/g, '/')) &&
+        !entry.entryName.includes('/__MACOSX/') &&
+        !path.basename(entry.entryName).startsWith('._')
+      );
+      const reelRecords = reelFiles.flatMap(entry => {
+        const data = JSON.parse(entry.getData().toString('utf8'));
+        return Array.isArray(data)
+          ? data
+          : Array.isArray(data.ig_reels_media)
+            ? data.ig_reels_media
+            : [];
       });
       const primaryRecords = postRecords.filter(item => item.fbid || item.timestamp);
       const mediaRecords = postRecords.filter(item =>
@@ -60,11 +74,12 @@ export class InstagramAdapter extends BaseAdapter {
       );
 
       if (primaryRecords.length > 0) {
-        posts.push(...this.parsePostJSON(primaryRecords));
+        posts.push(...this.parsePostJSON(primaryRecords, 'post'));
         this.mergeRelatedMedia(posts, mediaRecords);
       } else {
-        posts.push(...this.parsePostJSON(postRecords));
+        posts.push(...this.parsePostJSON(postRecords, 'post'));
       }
+      posts.push(...this.parsePostJSON(reelRecords, 'reel'));
       this.removeDuplicateMediaFiles(posts, entries);
     } catch (error) {
       console.error('Error extracting Instagram posts:', error);
@@ -75,6 +90,10 @@ export class InstagramAdapter extends BaseAdapter {
 
   private getPostCaption(item: any): string {
     if (typeof item.title === 'string' && item.title.trim()) return item.title;
+    const mediaTitle = item.media?.find((media: any) =>
+      typeof media.title === 'string' && media.title.trim()
+    )?.title;
+    if (mediaTitle) return mediaTitle;
 
     const captionLabel = item.label_values?.find((labelValue: any) =>
       typeof labelValue.label === 'string' &&
@@ -195,7 +214,7 @@ export class InstagramAdapter extends BaseAdapter {
     }
   }
 
-  private parsePostJSON(data: any): NormalizedPost[] {
+  private parsePostJSON(data: any, postType: 'post' | 'reel' = 'post'): NormalizedPost[] {
     const posts: NormalizedPost[] = [];
 
     try {
@@ -226,6 +245,7 @@ export class InstagramAdapter extends BaseAdapter {
         const post: NormalizedPost = {
           originalPlatformId: String(item.fbid || `ig_${fallbackId}`),
           platform: this.platform,
+          postType,
           content: caption || undefined,
           mediaUrls: mediaUris.length > 0 ? mediaUris : undefined,
           mediaTypes: mediaUris.length > 0 ? mediaTypes : undefined,

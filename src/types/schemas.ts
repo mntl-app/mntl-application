@@ -15,6 +15,7 @@ export type Metrics = z.infer<typeof MetricsSchema>;
 export const PostSchema = z.object({
   originalPlatformId: z.string(),
   platform: PlatformEnum,
+  postType: z.enum(['post', 'reel', 'text']).optional(),
   content: z.string().optional(),
   mediaUrls: z.array(z.string()).optional(),
   mediaTypes: z.array(z.enum(['image', 'video', 'none'])).optional(),

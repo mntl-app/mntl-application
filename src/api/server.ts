@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express';
 import multer from 'multer';
 import * as path from 'path';
 import * as fs from 'fs';
+import { randomUUID } from 'crypto';
 import AdmZip from 'adm-zip';
 import { InMemoryJobQueue } from '../queue/InMemoryJobQueue';
 import { ZipExtractor } from '../etl/extract/ZipExtractor';
@@ -27,6 +28,7 @@ const upload = multer({
 const jobQueue = InMemoryJobQueue.getInstance();
 const mediaArchives = new Map<string, string>();
 const archiveStore = new ArchiveStore();
+const serverInstanceId = randomUUID();
 const uploadsDir = path.join(process.cwd(), 'uploads');
 
 if (fs.existsSync(uploadsDir)) {
@@ -68,6 +70,38 @@ app.post('/api/upload', upload.single('archive'), async (req: Request, res: Resp
     if (!adapter) {
       fs.unlinkSync(zipPath);
       return res.status(400).json({ error: 'Unable to detect platform from archive' });
+    }
+
+    let uploadedPlatforms: unknown = [];
+    if (typeof req.body.uploadedPlatforms === 'string') {
+      try {
+        uploadedPlatforms = JSON.parse(req.body.uploadedPlatforms);
+      } catch {
+        fs.unlinkSync(zipPath);
+        return res.status(400).json({ error: 'Invalid uploaded platform list' });
+      }
+    }
+    if (
+      !Array.isArray(uploadedPlatforms) ||
+      uploadedPlatforms.some(platform => typeof platform !== 'string')
+    ) {
+      fs.unlinkSync(zipPath);
+      return res.status(400).json({ error: 'Invalid uploaded platform list' });
+    }
+    if (uploadedPlatforms.includes(adapter.platform)) {
+      fs.unlinkSync(zipPath);
+      return res.status(409).json({
+        error: `${adapter.platform} has already been uploaded in this migration flow`,
+      });
+    }
+    if (
+      typeof req.body.serverInstanceId === 'string' &&
+      req.body.serverInstanceId !== serverInstanceId
+    ) {
+      fs.unlinkSync(zipPath);
+      return res.status(409).json({
+        error: 'The server restarted. Refresh the page to start a new migration flow.',
+      });
     }
 
     const userId = req.body.userId || 'anonymous';
@@ -117,6 +151,14 @@ app.get('/api/platforms', (req: Request, res: Response) => {
   res.json({ platforms });
 });
 
+app.get('/api/session', (req: Request, res: Response) => {
+  const adapters = AdapterFactory.getAllAdapters();
+  res.json({
+    serverInstanceId,
+    platforms: adapters.map(adapter => adapter.platform),
+  });
+});
+
 app.post('/api/archives/:archiveId/selection', async (req: Request, res: Response) => {
   try {
     const archiveId = Array.isArray(req.params.archiveId) ? req.params.archiveId[0] : req.params.archiveId;
@@ -162,14 +204,27 @@ app.get('/api/data/followers', async (req: Request, res: Response) => {
   try {
     const archive = await getRequestedArchive(req, res);
     if (res.headersSent) return;
-    const followRelations = archive
+    const knownHandles = archive
+      ? await archiveStore.getKnownOwnerHandles(archive.platform)
+      : new Map<string, string>();
+    const allFollowRelations = archive
       ? archive.followers.map(followerId => ({
           followerId,
           followingId: archive.ownerId,
           platform: archive.platform,
+          accountHandle: knownHandles.get(followerId),
         }))
       : [];
-    res.json({ followRelations, count: followRelations.length, selection: archive?.selection });
+    const followRelations = archive?.platform === 'x'
+      ? allFollowRelations.filter(relation => relation.accountHandle)
+      : allFollowRelations;
+    res.json({
+      followRelations,
+      count: followRelations.length,
+      hiddenCount: allFollowRelations.length - followRelations.length,
+      selectionCatalog: { followers: archive?.followers || [] },
+      selection: archive?.selection,
+    });
   } catch (error) {
     console.error('Error fetching followers:', error);
     res.status(500).json({ error: 'Failed to fetch followers' });
@@ -180,14 +235,27 @@ app.get('/api/data/following', async (req: Request, res: Response) => {
   try {
     const archive = await getRequestedArchive(req, res);
     if (res.headersSent) return;
-    const followRelations = archive
+    const knownHandles = archive
+      ? await archiveStore.getKnownOwnerHandles(archive.platform)
+      : new Map<string, string>();
+    const allFollowRelations = archive
       ? archive.following.map(followingId => ({
           followerId: archive.ownerId,
           followingId,
           platform: archive.platform,
+          accountHandle: knownHandles.get(followingId),
         }))
       : [];
-    res.json({ followRelations, count: followRelations.length, selection: archive?.selection });
+    const followRelations = archive?.platform === 'x'
+      ? allFollowRelations.filter(relation => relation.accountHandle)
+      : allFollowRelations;
+    res.json({
+      followRelations,
+      count: followRelations.length,
+      hiddenCount: allFollowRelations.length - followRelations.length,
+      selectionCatalog: { following: archive?.following || [] },
+      selection: archive?.selection,
+    });
   } catch (error) {
     console.error('Error fetching following:', error);
     res.status(500).json({ error: 'Failed to fetch following' });
@@ -211,6 +279,9 @@ app.get('/api/data/summary', async (req: Request, res: Response) => {
     const archive = await getRequestedArchive(req, res);
     if (res.headersSent) return;
     const summary = {
+      platform: archive?.platform,
+      ownerId: archive?.ownerId,
+      ownerHandle: archive?.ownerHandle,
       posts: archive?.posts.length || 0,
       followers: archive?.followers.length || 0,
       following: archive?.following.length || 0,
@@ -246,8 +317,10 @@ app.get('/api/media', (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Media file not found' });
     }
     const normalizedEntryName = entryName.replace(/\\/g, '/');
+    const isSupportedMediaPath = normalizedEntryName.startsWith('media/') ||
+      normalizedEntryName.startsWith('data/tweets_media/');
     if (
-      !normalizedEntryName.startsWith('media/') ||
+      !isSupportedMediaPath ||
       normalizedEntryName.split('/').some(segment => segment === '.' || segment === '..')
     ) {
       return res.status(404).json({ error: 'Media file not found' });

@@ -127,7 +127,10 @@ export class InMemoryJobQueue {
       await this.updateJobProgress(jobId, { progress: 40, totalPosts: posts.length, processedPosts: 0 });
 
       const users = await adapter.extractUsers(job.data.zipPath);
-      const archiveOwnerId = users.find(user => user.username !== 'unknown')?.username || job.data.userId;
+      const archiveOwner = users.find(user => user.username !== 'unknown');
+      const archiveOwnerId = adapter.platform === 'x'
+        ? archiveOwner?.originalPlatformId || job.data.userId
+        : archiveOwner?.username || job.data.userId;
       await this.updateJobProgress(jobId, 50);
 
       const followRelations = await adapter.extractFollowRelations(job.data.zipPath);
@@ -165,6 +168,7 @@ export class InMemoryJobQueue {
       await this.archiveStore.save({
         archiveId,
         ownerId: archiveOwnerId,
+        ownerHandle: archiveOwner?.username,
         platform: adapter.platform,
         importedAt: new Date().toISOString(),
         followers: [...new Set(normalizedData.followRelations
