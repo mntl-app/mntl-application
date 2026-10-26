@@ -5,6 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MNTL Migration Tool</title>
     <style>
+        :root {
+            color-scheme: light;
+            --canvas: #f6f2ec;
+            --card: #fffcf7;
+            --line: #e2dacd;
+            --ink: #1b1916;
+            --muted: #6e675e;
+            --cobalt: #113692;
+            --cobalt-soft: #dde3f2;
+            --sand: #f1e3d3;
+        }
+
         * {
             margin: 0;
             padding: 0;
@@ -12,70 +24,146 @@
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: 'Instrument Sans', 'Segoe UI', sans-serif;
+            background: var(--canvas);
+            color: var(--ink);
             min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
+            padding: 32px 24px;
         }
 
         .container {
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            max-width: 600px;
+            background: transparent;
+            max-width: 900px;
             width: 100%;
-            padding: 40px;
+            margin: 0 auto;
+            padding: 12px 0 48px;
         }
 
         h1 {
-            color: #333;
-            margin-bottom: 10px;
-            font-size: 28px;
+            color: var(--ink);
+            margin-bottom: 8px;
+            font-family: 'Kanit', Impact, 'Arial Narrow', sans-serif;
+            font-size: clamp(32px, 6vw, 52px);
+            font-weight: 900;
+            line-height: 0.98;
+            letter-spacing: -0.035em;
+            text-transform: uppercase;
         }
 
         .subtitle {
-            color: #666;
+            color: var(--muted);
+            margin-bottom: 28px;
+            font-size: 15px;
+            line-height: 1.5;
+        }
+
+        .brand-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 50px;
+        }
+
+        .brand-lockup {
+            display: inline-flex;
+            align-items: center;
+            gap: 9px;
+            color: var(--ink);
+            text-decoration: none;
+        }
+
+        .brand-mark {
+            display: block;
+            width: 61px;
+            height: 56px;
+        }
+
+        .brand-wordmark {
+            font-family: 'Kanit', Impact, 'Arial Narrow', sans-serif;
+            color: #10231c;
+            font-size: clamp(36px, 4vw, 48px);
+            font-weight: 900;
+            font-style: italic;
+            line-height: 0.9;
+            letter-spacing: -0.04em;
+        }
+
+        .brand-context {
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+        }
+
+        .page-intro {
+            max-width: 640px;
             margin-bottom: 30px;
-            font-size: 14px;
+        }
+
+        .eyebrow {
+            color: var(--cobalt);
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.12em;
+            margin-bottom: 12px;
+            text-transform: uppercase;
+        }
+
+        .upload-card {
+            background: var(--card);
+            border: 1px solid var(--line);
+            border-radius: 24px;
+            padding: clamp(20px, 5vw, 40px);
         }
 
         .upload-area {
-            border: 3px dashed #667eea;
-            border-radius: 15px;
-            padding: 40px;
+            border: 1.5px dashed #c9c0b3;
+            border-radius: 18px;
+            padding: clamp(28px, 6vw, 48px) 20px;
             text-align: center;
             cursor: pointer;
-            transition: all 0.3s ease;
-            background: #f8f9ff;
+            transition: border-color 0.2s ease, background 0.2s ease;
+            background: var(--canvas);
         }
 
         .upload-area:hover {
-            border-color: #764ba2;
-            background: #f0f2ff;
+            border-color: var(--cobalt);
+            background: #f0eee9;
+        }
+
+        .upload-area:focus-visible {
+            outline: 3px solid var(--cobalt);
+            outline-offset: 4px;
         }
 
         .upload-area.dragover {
-            border-color: #764ba2;
-            background: #e8ebff;
+            border-color: var(--cobalt);
+            background: var(--cobalt-soft);
         }
 
         .upload-icon {
-            font-size: 48px;
-            margin-bottom: 15px;
+            color: var(--cobalt);
+            margin-bottom: 18px;
+        }
+
+        .upload-icon svg {
+            display: block;
+            width: 34px;
+            height: 34px;
+            margin: 0 auto;
         }
 
         .upload-text {
-            color: #666;
+            color: var(--ink);
             font-size: 16px;
-            margin-bottom: 10px;
+            font-weight: 600;
+            margin-bottom: 7px;
         }
 
         .upload-hint {
-            color: #999;
-            font-size: 12px;
+            color: var(--muted);
+            font-size: 13px;
         }
 
         #fileInput {
@@ -85,8 +173,9 @@
         .file-info {
             margin-top: 20px;
             padding: 15px;
-            background: #f0f2ff;
-            border-radius: 10px;
+            background: var(--canvas);
+            border: 1px solid var(--line);
+            border-radius: 14px;
             display: none;
         }
 
@@ -96,31 +185,32 @@
 
         .file-name {
             font-weight: 600;
-            color: #333;
+            color: var(--ink);
             margin-bottom: 5px;
         }
 
         .file-size {
-            color: #666;
+            color: var(--muted);
             font-size: 14px;
         }
 
         .btn {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: var(--ink);
             color: white;
             border: none;
-            padding: 15px 30px;
-            border-radius: 10px;
-            font-size: 16px;
+            padding: 15px 24px;
+            border-radius: 999px;
+            font-size: 15px;
             font-weight: 600;
             cursor: pointer;
             width: 100%;
-            margin-top: 20px;
-            transition: transform 0.2s ease;
+            margin-top: 18px;
+            transition: background 0.2s ease, transform 0.2s ease;
         }
 
         .btn:hover {
-            transform: translateY(-2px);
+            background: var(--cobalt);
+            transform: translateY(-1px);
         }
 
         .btn:disabled {
@@ -139,9 +229,10 @@
         }
 
         .job-info {
-            background: #f8f9ff;
+            background: var(--card);
+            border: 1px solid var(--line);
             padding: 15px;
-            border-radius: 10px;
+            border-radius: 14px;
             margin-bottom: 15px;
         }
 
@@ -153,27 +244,27 @@
         }
 
         .job-info-label {
-            color: #666;
+            color: var(--muted);
             font-weight: 500;
         }
 
         .job-info-value {
-            color: #333;
+            color: var(--ink);
             font-weight: 600;
         }
 
         .progress-bar {
             width: 100%;
             height: 20px;
-            background: #e0e0e0;
-            border-radius: 10px;
+            background: var(--line);
+            border-radius: 999px;
             overflow: hidden;
             margin-top: 15px;
         }
 
         .progress-fill {
             height: 100%;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: var(--cobalt);
             transition: width 0.3s ease;
             width: 0%;
         }
@@ -208,8 +299,8 @@
         }
 
         .error-message {
-            background: #f8d7da;
-            color: #721c24;
+            background: #f8e7e4;
+            color: #7d3029;
             padding: 15px;
             border-radius: 10px;
             margin-top: 20px;
@@ -232,8 +323,8 @@
         }
 
         .success-message {
-            background: #d4edda;
-            color: #155724;
+            background: #e4eee3;
+            color: #315a35;
             padding: 15px;
             border-radius: 10px;
             margin-top: 20px;
@@ -406,9 +497,16 @@
 
         .summary-tabs {
             display: flex;
+            flex-wrap: nowrap;
             gap: 8px;
-            flex-wrap: wrap;
+            overflow-x: auto;
             margin: 16px 0;
+            padding-bottom: 5px;
+            scrollbar-width: thin;
+        }
+
+        .summary-tab {
+            flex: 0 0 auto;
         }
 
         .summary-counts {
@@ -558,26 +656,231 @@
         [hidden] {
             display: none !important;
         }
+
+        .results-section {
+            margin-top: 32px;
+        }
+
+        .wizard-heading h2,
+        .comparison-heading h2 {
+            color: var(--ink);
+            font-family: 'Kanit', Impact, 'Arial Narrow', sans-serif;
+            font-size: clamp(24px, 4vw, 32px);
+            font-weight: 900;
+            line-height: 1;
+            text-transform: uppercase;
+        }
+
+        .wizard-progress {
+            color: var(--cobalt);
+            font-size: 11px;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+        }
+
+        .selection-toolbar input[type="search"] {
+            background: var(--card);
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            color: var(--ink);
+            padding: 11px 16px;
+        }
+
+        .selection-action,
+        .summary-tab {
+            background: var(--card);
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            color: var(--ink);
+            font-size: 13px;
+            padding: 10px 15px;
+            transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+        }
+
+        .selection-action:hover,
+        .summary-tab:hover {
+            border-color: var(--cobalt);
+            color: var(--cobalt);
+        }
+
+        .summary-tab.active {
+            background: var(--ink);
+            border-color: var(--ink);
+            color: var(--card);
+        }
+
+        .data-list {
+            background: transparent;
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            max-height: 480px;
+            padding: 12px;
+        }
+
+        .data-item {
+            background: var(--card);
+            border: 1px solid var(--line);
+            border-left: 3px solid var(--cobalt);
+            border-radius: 14px;
+            margin-bottom: 10px;
+            padding: 16px;
+        }
+
+        .data-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .data-item-platform {
+            color: var(--cobalt);
+            font-size: 11px;
+            letter-spacing: 0.06em;
+        }
+
+        .data-item-date,
+        .data-item-metrics {
+            color: var(--muted);
+        }
+
+        .data-item-content {
+            color: var(--ink);
+            line-height: 1.5;
+        }
+
+        .summary-count {
+            background: var(--card);
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            text-align: left;
+        }
+
+        .summary-count strong {
+            color: var(--cobalt);
+            font-family: 'Kanit', Impact, 'Arial Narrow', sans-serif;
+            font-size: 28px;
+        }
+
+        .summary-count span {
+            color: var(--muted);
+        }
+
+        .migration-notice {
+            background: var(--cobalt-soft);
+            border: 1px solid #c9d2e8;
+            border-radius: 14px;
+            color: var(--ink);
+            line-height: 1.5;
+        }
+
+        .wizard-navigation .btn-secondary {
+            background: transparent;
+            border: 1px solid var(--line);
+            color: var(--ink);
+        }
+
+        .wizard-navigation .btn-secondary:hover {
+            background: var(--cobalt-soft);
+            border-color: var(--cobalt-soft);
+        }
+
+        .no-data {
+            color: var(--muted);
+            line-height: 1.5;
+        }
+
+        .selection-checkbox input {
+            accent-color: var(--cobalt);
+        }
+
+        .status-pending {
+            background: #f5ead1;
+            color: #74591c;
+        }
+
+        .status-processing {
+            background: var(--cobalt-soft);
+            color: var(--cobalt);
+        }
+
+        .status-completed {
+            background: #e4eee3;
+            color: #315a35;
+        }
+
+        .status-failed {
+            background: #f8e7e4;
+            color: #7d3029;
+        }
+
+        .platform-badge {
+            background: var(--cobalt);
+        }
+
+        @media (max-width: 640px) {
+            body {
+                padding: 20px 16px;
+            }
+
+            .container {
+                padding-top: 4px;
+            }
+
+            .brand-header {
+                margin-bottom: 40px;
+            }
+
+            .upload-card {
+                border-radius: 20px;
+            }
+
+            .selection-toolbar {
+                flex-wrap: wrap;
+            }
+
+            .selection-toolbar input[type="search"] {
+                flex-basis: 100%;
+            }
+
+            .wizard-navigation {
+                flex-direction: column-reverse;
+            }
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🚀 MNTL Migration Tool</h1>
-        <p class="subtitle">Import social media archives from Instagram, Facebook, X, and TikTok</p>
+        <header class="brand-header">
+            <div class="brand-lockup" aria-label="MNTL">
+                <img class="brand-mark" src="/mntl-mark.svg" alt="">
+                <span class="brand-wordmark">MNTL</span>
+            </div>
+            <span class="brand-context">Archive migration</span>
+        </header>
 
-        <div class="upload-area" id="uploadArea">
-            <div class="upload-icon">📁</div>
-            <div class="upload-text">Drop your ZIP archive here or click to browse</div>
-            <div class="upload-hint" id="uploadHint">Supported: Instagram, Facebook, X, TikTok archives</div>
-            <input type="file" id="fileInput" accept=".zip">
+        <div class="page-intro">
+            <div class="eyebrow">Your data, your choice</div>
+            <h1>Bring your social history with you.</h1>
+            <p class="subtitle">Review and choose what you want to carry forward from your social archives.</p>
         </div>
 
-        <div class="file-info" id="fileInfo">
-            <div class="file-name" id="fileName"></div>
-            <div class="file-size" id="fileSize"></div>
-        </div>
+        <section class="upload-card" id="uploadCard" aria-label="Upload social archive">
+            <div class="upload-area" id="uploadArea" role="button" tabindex="0" aria-label="Choose a ZIP archive">
+                <div class="upload-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none">
+                        <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14v4.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </div>
+                <div class="upload-text">Drop your ZIP archive here or browse files</div>
+                <div class="upload-hint" id="uploadHint">Available platforms: Instagram, Facebook, X, TikTok</div>
+                <input type="file" id="fileInput" accept=".zip">
+            </div>
 
-        <button class="btn" id="uploadBtn" disabled>Upload & Process</button>
+            <div class="file-info" id="fileInfo">
+                <div class="file-name" id="fileName"></div>
+                <div class="file-size" id="fileSize"></div>
+            </div>
+
+            <button class="btn" id="uploadBtn" disabled>Upload archive</button>
+        </section>
 
         <div class="progress-section" id="progressSection">
             <div class="job-info">
@@ -792,6 +1095,12 @@
         updateAvailablePlatforms();
 
         uploadArea.addEventListener('click', () => fileInput.click());
+        uploadArea.addEventListener('keydown', event => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                fileInput.click();
+            }
+        });
 
         uploadArea.addEventListener('dragover', (e) => {
             e.preventDefault();
@@ -828,6 +1137,7 @@
             fileSize.textContent = formatFileSize(file.size);
             fileInfo.classList.add('show');
             uploadBtn.disabled = false;
+            uploadBtn.textContent = 'Start import';
             hideError();
             hideSuccess();
         }
@@ -844,7 +1154,7 @@
             if (!selectedFile) return;
 
             uploadBtn.disabled = true;
-            uploadBtn.textContent = 'Uploading...';
+            uploadBtn.textContent = 'Uploading archive...';
 
             const formData = new FormData();
             formData.append('archive', selectedFile);
@@ -884,7 +1194,7 @@
             } catch (error) {
                 showError(error.message);
                 uploadBtn.disabled = false;
-                uploadBtn.textContent = 'Upload & Process';
+                uploadBtn.textContent = 'Start import';
             }
         });
 
@@ -907,7 +1217,7 @@
                     if (data.status === 'completed' || data.status === 'failed') {
                         clearInterval(progressInterval);
                         uploadBtn.disabled = false;
-                        uploadBtn.textContent = 'Upload & Process';
+                        uploadBtn.textContent = 'Start import';
 
                         if (data.status === 'completed') {
                             uploadedPlatforms.add(currentPlatform);
@@ -915,6 +1225,7 @@
                             renderAvailablePlatforms();
                             showSuccess('Archive processed. Review and confirm your selections to complete migration.');
                             progressSection.classList.remove('show');
+                            document.getElementById('uploadCard').hidden = true;
                             uploadArea.hidden = true;
                             fileInfo.classList.remove('show');
                             uploadBtn.hidden = true;
@@ -932,7 +1243,7 @@
                     clearInterval(progressInterval);
                     showError(error.message);
                     uploadBtn.disabled = false;
-                    uploadBtn.textContent = 'Upload & Process';
+                    uploadBtn.textContent = 'Start import';
                 }
             }, 1000);
         }
@@ -1003,7 +1314,8 @@
             fileInput.value = '';
             fileInfo.classList.remove('show');
             uploadBtn.disabled = true;
-            uploadBtn.textContent = 'Upload & Process';
+            uploadBtn.textContent = 'Upload archive';
+            document.getElementById('uploadCard').hidden = false;
             uploadArea.hidden = false;
             uploadBtn.hidden = false;
             progressSection.classList.remove('show');
