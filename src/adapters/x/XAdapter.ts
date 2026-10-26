@@ -92,10 +92,14 @@ export class XAdapter extends BaseAdapter {
         });
         const hasVideo = mediaTypes.includes('video');
         const content = item.full_text || item.text || undefined;
+        const replyToPostId = item.in_reply_to_status_id_str || item.in_reply_to_status_id;
+        const isReply = replyToPostId !== undefined && replyToPostId !== null && String(replyToPostId).length > 0;
         const post: NormalizedPost = {
           originalPlatformId: postId,
           platform: this.platform,
           postType: hasVideo ? 'reel' : mediaUrls.length ? 'post' : 'text',
+          isReply: isReply || undefined,
+          replyToPostId: isReply ? String(replyToPostId) : undefined,
           content,
           mediaUrls: mediaUrls.length ? mediaUrls : undefined,
           mediaTypes: mediaUrls.length ? mediaTypes : undefined,

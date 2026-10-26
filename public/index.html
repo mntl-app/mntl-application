@@ -622,6 +622,15 @@
                     <button class="selection-action" data-select-kind="posts" data-select-all="false">Clear all</button>
                 </div>
                 <div class="data-list" id="postsList"></div>
+                <div id="repliesSection" hidden>
+                    <h3>Replies</h3>
+                    <p class="subtitle">Replies are listed separately from posts and Reels. All replies are included by default.</p>
+                    <div class="selection-toolbar">
+                        <button class="selection-action" data-select-kind="replies" data-select-all="true">Select all replies</button>
+                        <button class="selection-action" data-select-kind="replies" data-select-all="false">Clear all replies</button>
+                    </div>
+                    <div class="data-list" id="repliesList"></div>
+                </div>
                 <div class="wizard-navigation">
                     <button class="btn" data-wizard-next="followers">Next: followers</button>
                 </div>
@@ -673,6 +682,7 @@
                 <div class="summary-counts" id="selectionCounts"></div>
                 <div class="summary-tabs">
                     <button class="summary-tab active" data-summary-tab="selectedPosts">Selected posts</button>
+                    <button class="summary-tab" data-summary-tab="selectedReplies">Selected replies</button>
                     <button class="summary-tab" data-summary-tab="selectedFollowers">Selected followers</button>
                     <button class="summary-tab" data-summary-tab="selectedFollowing">Selected following</button>
                     <button class="summary-tab" data-summary-tab="followingMatches">Matched following</button>
@@ -682,6 +692,10 @@
                 <section class="summary-panel" id="selectedPosts">
                     <h3>Posts selected for migration</h3>
                     <div class="data-list" id="selectedPostsList"></div>
+                </section>
+                <section class="summary-panel" id="selectedReplies" hidden>
+                    <h3>Replies selected for migration</h3>
+                    <div class="data-list" id="selectedRepliesList"></div>
                 </section>
                 <section class="summary-panel" id="selectedFollowers" hidden>
                     <h3>Followers selected for migration</h3>
@@ -748,7 +762,7 @@
         let currentPlatform = null;
         let progressInterval = null;
         let currentSelection = null;
-        let selectionCatalog = { postIds: [], followers: [], following: [] };
+        let selectionCatalog = { posts: [], replies: [], followers: [], following: [] };
         let selectionSavePromise = Promise.resolve();
         const uploadedPlatformStorageKey = 'mntl-migration-uploaded-platforms';
         let uploadedPlatforms = new Set();
@@ -837,7 +851,7 @@
                 sessionStorage.setItem(getUploadedPlatformStorageKey(), JSON.stringify([...uploadedPlatforms]));
                 renderAvailablePlatforms();
                 currentSelection = null;
-                selectionCatalog = { postIds: [], followers: [], following: [] };
+                selectionCatalog = { posts: [], replies: [], followers: [], following: [] };
                 Object.keys(loadedTabData).forEach(tab => delete loadedTabData[tab]);
                 selectionSavePromise = Promise.resolve();
                 platformValue.textContent = data.platform;
@@ -886,7 +900,7 @@
                             uploadBtn.hidden = true;
                             document.getElementById('resultsSection').classList.add('show');
                             currentSelection = null;
-                            selectionCatalog = { postIds: [], followers: [], following: [] };
+                            selectionCatalog = { posts: [], replies: [], followers: [], following: [] };
                             Object.keys(loadedTabData).forEach(tab => delete loadedTabData[tab]);
                             selectionSavePromise = Promise.resolve();
                             goToWizardStep('postsStep').catch(error => showError(error.message));
@@ -993,7 +1007,10 @@
                 page.hidden = page.id !== stepId;
             });
             const tab = wizardDataTabs[stepId];
-            if (tab) await loadTabData(tab);
+            if (tab) {
+                await loadTabData(tab);
+                if (tab === 'posts') await loadTabData('replies');
+            }
             document.getElementById('resultsSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
 
@@ -1122,7 +1139,10 @@
             loadedTabData[tab] = data;
 
             if (tab === 'posts') {
-                selectionCatalog.postIds = data.posts.map(post => post.originalPlatformId);
+                selectionCatalog.posts = data.posts.map(post => post.originalPlatformId);
+            } else if (tab === 'replies') {
+                selectionCatalog.replies = data.replies.map(post => post.originalPlatformId);
+                document.getElementById('repliesSection').hidden = data.count === 0;
             } else if (tab === 'followers' || tab === 'following') {
                 const key = tab === 'followers' ? 'followerId' : 'followingId';
                 selectionCatalog[tab] = data.selectionCatalog?.[tab] ||
@@ -1138,6 +1158,7 @@
 
             const items = tab === 'followers' || tab === 'following' ? data.followRelations :
                           tab === 'posts' ? data.posts :
+                          tab === 'replies' ? data.replies :
                           data.likes;
 
             listElement.innerHTML = items.map(item => renderItem(tab, item)).join('');
@@ -1151,7 +1172,8 @@
         function renderItem(tab, item) {
             switch (tab) {
                 case 'posts':
-                    return renderSelectionRow('posts', item.originalPlatformId, item.content || '', `
+                case 'replies':
+                    return renderSelectionRow(tab, item.originalPlatformId, item.content || '', `
                         <div class="data-item">
                             <div class="data-item-header">
                                 <span class="data-item-platform">${escapeHtml(item.platform)}</span>
@@ -1161,6 +1183,7 @@
                             <div class="data-item-metrics">
                                 <span class="data-item-metric">Post ID: ${escapeHtml(item.originalPlatformId)}</span>
                             </div>
+                            ${item.replyToPostId ? `<div class="data-item-content">Reply to post ID: ${escapeHtml(item.replyToPostId)}</div>` : ''}
                             <div class="data-item-content">${escapeHtml(item.content || '(No caption)')}</div>
                             ${renderPostMedia(item)}
                         </div>
@@ -1215,7 +1238,7 @@
         }
 
         function selectionKey(kind) {
-            return kind === 'posts' ? 'postIds' : kind;
+            return kind === 'posts' || kind === 'replies' ? 'postIds' : kind;
         }
 
         function renderSelectionRow(kind, value, searchableText, content) {
@@ -1270,9 +1293,18 @@
                 const kind = button.dataset.selectKind;
                 const key = selectionKey(kind);
                 if (!currentSelection || !loadedTabData[kind]) return;
-                currentSelection[key] = button.dataset.selectAll === 'true'
-                    ? [...selectionCatalog[key]]
-                    : [];
+                if (kind === 'posts' || kind === 'replies') {
+                    const selectedIds = new Set(currentSelection.postIds);
+                    selectionCatalog[kind].forEach(id => {
+                        if (button.dataset.selectAll === 'true') selectedIds.add(id);
+                        else selectedIds.delete(id);
+                    });
+                    currentSelection.postIds = [...selectedIds];
+                } else {
+                    currentSelection[key] = button.dataset.selectAll === 'true'
+                        ? [...selectionCatalog[kind]]
+                        : [];
+                }
                 renderTabData(kind, loadedTabData[kind]);
                 queueSelectionSave();
             });
@@ -1329,6 +1361,9 @@
             const selectedPosts = (loadedTabData.posts?.posts || []).filter(post =>
                 currentSelection.postIds.includes(post.originalPlatformId)
             );
+            const selectedReplies = (loadedTabData.replies?.replies || []).filter(reply =>
+                currentSelection.postIds.includes(reply.originalPlatformId)
+            );
             const selectedFollowers = (loadedTabData.followers?.followRelations || []).filter(relation =>
                 currentSelection.followers.includes(relation.followerId)
             );
@@ -1358,6 +1393,7 @@
                 ['Selected posts', selectedPosts.length],
                 ['Including reels', selectedReels],
                 ['Text-only posts', selectedTextPosts],
+                ['Selected replies', selectedReplies.length],
                 ['Selected followers', selectedFollowers.length],
                 ['Selected following', selectedFollowing.length],
                 ['Matched likes', matchingLikes.length],
@@ -1378,6 +1414,23 @@
                     </article>
                 `).join('')
                 : '<div class="no-data">No posts selected for migration.</div>';
+            document.getElementById('selectedRepliesList').innerHTML = selectedReplies.length
+                ? selectedReplies.map(reply => `
+                    <article class="data-item">
+                        <div class="data-item-header">
+                            <span class="data-item-platform">${escapeHtml(reply.platform)}</span>
+                            ${renderPostTypeBadge(reply)}
+                            <span class="data-item-date">${new Date(reply.createdAt).toLocaleDateString()}</span>
+                        </div>
+                        <div class="data-item-metrics">
+                            <span class="data-item-metric">Reply ID: ${escapeHtml(reply.originalPlatformId)}</span>
+                        </div>
+                        ${reply.replyToPostId ? `<div class="data-item-content">Reply to post ID: ${escapeHtml(reply.replyToPostId)}</div>` : ''}
+                        <div class="data-item-content"><strong>${escapeHtml(reply.content || '(No caption)')}</strong></div>
+                        ${renderPostMedia(reply)}
+                    </article>
+                `).join('')
+                : '<div class="no-data">No replies selected for migration.</div>';
 
             document.getElementById('selectedFollowersList').innerHTML = selectedFollowers.length
                 ? selectedFollowers.map(relation => `

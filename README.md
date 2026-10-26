@@ -205,6 +205,11 @@ The wizard saves after selection changes and before moving to the next step.
 
 Selections may contain only IDs and names present in that archive.
 
+### Fetch posts and replies
+`GET /api/data/posts` returns non-reply posts and reels. `GET /api/data/replies`
+returns replies separately. Both responses include the saved selection, and the
+reply records include the parent post ID when the X archive provides it.
+
 ### Crossmatching likes to posts
 `GET /api/data/likes` returns imported likes with `matchedPost` and `matchType`.
 Likes are matched first by platform and post identifier. Instagram exports that
@@ -275,6 +280,8 @@ Get list of supported platforms.
   originalPlatformId: string;
   platform: 'instagram' | 'facebook' | 'x' | 'tiktok';
   postType?: 'post' | 'reel' | 'text';
+  isReply?: boolean;
+  replyToPostId?: string;
   content?: string;
   mediaUrls?: string[];
   mediaTypes?: ('image' | 'video' | 'none')[];
@@ -329,6 +336,7 @@ Get list of supported platforms.
 - Detects Twitter-specific archive paths or `tweets.js` files, not generic `data` filenames
 - Strips JavaScript wrapper from `.js` files (e.g., `window.YTD.tweets.part0 = [...]`)
 - Imports tweets, follower/following account IDs, and liked tweet IDs from standard X archive files
+- Identifies replies by their exported parent post ID and presents them in a separately selectable list from posts and reels
 - Shows X follower/following handles only when a matching account archive is stored; unknown IDs stay saved but hidden
 - Maps photo tweets to regular posts, video tweets to reels, and text-only tweets to text posts
 - Serves photo and video files from the uploaded archive when present

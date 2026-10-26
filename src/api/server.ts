@@ -181,11 +181,23 @@ app.get('/api/data/posts', async (req: Request, res: Response) => {
   try {
     const archive = await getRequestedArchive(req, res);
     if (res.headersSent) return;
-    const posts = archive?.posts || [];
+    const posts = archive?.posts.filter(post => !post.isReply) || [];
     res.json({ posts, count: posts.length, selection: archive?.selection });
   } catch (error) {
     console.error('Error fetching posts:', error);
     res.status(500).json({ error: 'Failed to fetch posts' });
+  }
+});
+
+app.get('/api/data/replies', async (req: Request, res: Response) => {
+  try {
+    const archive = await getRequestedArchive(req, res);
+    if (res.headersSent) return;
+    const replies = archive?.posts.filter(post => post.isReply) || [];
+    res.json({ replies, count: replies.length, selection: archive?.selection });
+  } catch (error) {
+    console.error('Error fetching replies:', error);
+    res.status(500).json({ error: 'Failed to fetch replies' });
   }
 });
 

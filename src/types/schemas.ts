@@ -16,6 +16,8 @@ export const PostSchema = z.object({
   originalPlatformId: z.string(),
   platform: PlatformEnum,
   postType: z.enum(['post', 'reel', 'text']).optional(),
+  isReply: z.boolean().optional(),
+  replyToPostId: z.string().optional(),
   content: z.string().optional(),
   mediaUrls: z.array(z.string()).optional(),
   mediaTypes: z.array(z.enum(['image', 'video', 'none'])).optional(),

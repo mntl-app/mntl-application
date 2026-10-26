@@ -161,6 +161,12 @@ test('extracts X posts, media categories, followers, following, and likes', asyn
         created_at: 'Sat Oct 24 23:56:43 +0000 2026',
         full_text: 'Text-only [post]',
       } },
+      { tweet: {
+        id_str: 'tweet-reply',
+        created_at: 'Sat Oct 24 23:56:44 +0000 2026',
+        full_text: 'Reply to another post',
+        in_reply_to_status_id_str: 'parent-tweet',
+      } },
     ])};`)
   );
   zip.addFile('data/tweets_media/tweet-photo-photo.jpg', Buffer.from('photo'));
@@ -201,8 +207,9 @@ test('extracts X posts, media categories, followers, following, and likes', asyn
     assert.equal(adapter.detect(zip.getEntries().map(entry => entry.entryName)), true);
 
     const posts = await adapter.extractPosts(archivePath);
-    assert.equal(posts.length, 3);
+    assert.equal(posts.length, 4);
     assert.equal(posts[0].postType, 'post');
+    assert.equal(posts[0].isReply, undefined);
     assert.deepEqual(posts[0].mediaUrls, ['data/tweets_media/tweet-photo-photo.jpg']);
     assert.equal(posts[0].mediaTypes?.[0], 'image');
     assert.equal(posts[1].postType, 'reel');
@@ -210,6 +217,9 @@ test('extracts X posts, media categories, followers, following, and likes', asyn
     assert.equal(posts[1].mediaTypes?.[0], 'video');
     assert.equal(posts[2].postType, 'text');
     assert.equal(posts[2].content, 'Text-only [post]');
+    assert.equal(posts[3].postType, 'text');
+    assert.equal(posts[3].isReply, true);
+    assert.equal(posts[3].replyToPostId, 'parent-tweet');
 
     const [user] = await adapter.extractUsers(archivePath);
     assert.equal(user.originalPlatformId, 'owner-id');
