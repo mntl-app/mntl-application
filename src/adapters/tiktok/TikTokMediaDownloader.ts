@@ -68,7 +68,17 @@ export class TikTokMediaDownloader {
         const temporaryPath = `${targetPath}.${randomUUID()}.tmp`;
         const byteLimit = Math.min(MAX_VIDEO_BYTES, MAX_ARCHIVE_VIDEO_BYTES - totalBytes);
         if (byteLimit <= 0) throw new Error('TikTok videos exceed the total archive download limit');
-        const downloadedBytes = await this.downloadVideo(videoUrl, temporaryPath, byteLimit);
+        let downloadedBytes: number;
+        try {
+          downloadedBytes = await this.downloadVideo(videoUrl, temporaryPath, byteLimit);
+        } catch (error) {
+          if (!this.isDownloadTimeout(error)) throw error;
+          await fs.rm(temporaryPath, { force: true });
+          console.warn(
+            `TikTok video download timed out for archive ${archiveId}, post ${post.originalPlatformId}; keeping the archive URL`
+          );
+          continue;
+        }
         await fs.rename(temporaryPath, targetPath);
         totalBytes += downloadedBytes;
         downloadedCount++;
@@ -83,6 +93,11 @@ export class TikTokMediaDownloader {
       console.info(`Downloaded ${downloadedCount} TikTok post video(s) into local media storage`);
     }
     return updatedPosts;
+  }
+
+  private isDownloadTimeout(error: unknown): boolean {
+    return error instanceof DOMException &&
+      (error.name === 'AbortError' || error.name === 'TimeoutError');
   }
 
   private async downloadVideo(url: string, targetPath: string, byteLimit: number): Promise<number> {

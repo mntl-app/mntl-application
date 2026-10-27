@@ -11,6 +11,8 @@ import * as path from 'path';
 export interface MigrationJobData {
   zipPath: string;
   userId: string;
+  mntlUserId: string;
+  mntlHandle: string;
   platform?: Platform;
 }
 
@@ -173,6 +175,8 @@ export class JobQueue {
         archiveId,
         ownerId: archiveOwnerId,
         ownerHandle: archiveOwner?.username,
+        mntlUserId: job.data.mntlUserId,
+        mntlHandle: job.data.mntlHandle,
         platform: adapter.platform,
         importedAt: new Date().toISOString(),
         followers: [...new Set(normalizedData.followRelations

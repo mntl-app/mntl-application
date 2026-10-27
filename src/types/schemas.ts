@@ -83,6 +83,30 @@ export const CommentSchema = z.object({
 
 export type NormalizedComment = z.infer<typeof CommentSchema>;
 
+export const ActivitySchema = z.object({
+  activityId: z.string(),
+  type: z.enum(['like', 'comment']),
+  platform: PlatformEnum,
+  actor: z.object({
+    mntlUserId: z.string(),
+    platformAccountId: z.string(),
+  }),
+  target: z.object({
+    platformPostId: z.string(),
+    type: z.enum(['post', 'reel', 'text', 'reply', 'unknown']),
+    text: z.string().optional(),
+    url: z.string().optional(),
+    mediaUrls: z.array(z.string()).optional(),
+    mediaTypes: z.array(z.enum(['image', 'video', 'none'])).optional(),
+    ownerMntlUserId: z.string().optional(),
+    ownerHandle: z.string().optional(),
+  }),
+  content: z.string().optional(),
+  occurredAt: z.date().optional(),
+});
+
+export type NormalizedActivity = z.infer<typeof ActivitySchema>;
+
 export const MigrationJobSchema = z.object({
   jobId: z.string(),
   platform: PlatformEnum,

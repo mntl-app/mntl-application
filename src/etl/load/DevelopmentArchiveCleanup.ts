@@ -22,6 +22,11 @@ export async function clearDevelopmentArchives(
       directoriesOnly: false,
     },
     {
+      directory: path.join(rootDirectory, 'data'),
+      shouldRemove: (name: string) => name === 'mntl-users.json',
+      directoriesOnly: false,
+    },
+    {
       directory: path.join(rootDirectory, 'data', 'media'),
       shouldRemove: (name: string) => /^[a-f0-9]{32}$/i.test(name),
       directoriesOnly: true,

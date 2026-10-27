@@ -8,6 +8,7 @@ import { InMemoryJobQueue } from '../queue/InMemoryJobQueue';
 import { ZipExtractor } from '../etl/extract/ZipExtractor';
 import { AdapterFactory } from '../adapters/AdapterFactory';
 import { ArchiveStore, StoredArchive } from '../etl/load/ArchiveStore';
+import { MntlUserStore } from '../etl/load/MntlUserStore';
 
 const app = express();
 const upload = multer({
@@ -28,6 +29,7 @@ const upload = multer({
 const jobQueue = InMemoryJobQueue.getInstance();
 const mediaArchives = new Map<string, string>();
 const archiveStore = new ArchiveStore();
+const mntlUserStore = new MntlUserStore();
 const serverInstanceId = randomUUID();
 const uploadsDir = path.join(process.cwd(), 'uploads');
 
@@ -51,6 +53,51 @@ async function getRequestedArchive(req: Request, res: Response): Promise<StoredA
 
 app.use(express.json({ limit: '5mb' }));
 app.use(express.static('public'));
+
+app.post('/api/users', async (req: Request, res: Response) => {
+  try {
+    if (typeof req.body.handle !== 'string') {
+      return res.status(400).json({ error: 'MNTL handle is required' });
+    }
+    const user = await mntlUserStore.create(req.body.handle);
+    return res.status(201).json({ user });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    if (message.startsWith('MNTL handle must be')) {
+      return res.status(400).json({ error: message });
+    }
+    if (message === 'That MNTL handle is already taken') {
+      return res.status(409).json({ error: message });
+    }
+    console.error('MNTL user creation error:', error);
+    return res.status(500).json({ error: 'Failed to create MNTL profile' });
+  }
+});
+
+app.get('/api/users/:userId', async (req: Request, res: Response) => {
+  try {
+    const userId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
+    const user = await mntlUserStore.getById(userId);
+    if (!user) return res.status(404).json({ error: 'MNTL profile not found' });
+    return res.json({ user });
+  } catch (error) {
+    console.error('MNTL user lookup error:', error);
+    return res.status(500).json({ error: 'Failed to find MNTL profile' });
+  }
+});
+
+app.get('/api/users/:userId/activity', async (req: Request, res: Response) => {
+  try {
+    const userId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
+    const user = await mntlUserStore.getById(userId);
+    if (!user) return res.status(404).json({ error: 'MNTL profile not found' });
+    const activities = await archiveStore.getMntlActivities(userId);
+    return res.json({ activities, count: activities.length });
+  } catch (error) {
+    console.error('MNTL activity lookup error:', error);
+    return res.status(500).json({ error: 'Failed to fetch MNTL activity' });
+  }
+});
 
 app.post('/api/upload', upload.single('archive'), async (req: Request, res: Response) => {
   try {
@@ -104,10 +151,17 @@ app.post('/api/upload', upload.single('archive'), async (req: Request, res: Resp
       });
     }
 
-    const userId = req.body.userId || 'anonymous';
+    const mntlUserId = typeof req.body.mntlUserId === 'string' ? req.body.mntlUserId : '';
+    const mntlUser = mntlUserId ? await mntlUserStore.getById(mntlUserId) : null;
+    if (!mntlUser) {
+      fs.unlinkSync(zipPath);
+      return res.status(400).json({ error: 'Create a MNTL profile before uploading an archive' });
+    }
     const jobId = await jobQueue.addMigrationJob({
       zipPath,
-      userId,
+      userId: mntlUser.userId,
+      mntlUserId: mntlUser.userId,
+      mntlHandle: mntlUser.handle,
       platform: adapter.platform,
     });
     mediaArchives.set(path.basename(zipPath), zipPath);
@@ -342,6 +396,20 @@ app.post('/api/compare', async (req: Request, res: Response) => {
     console.error('Archive comparison error:', error);
     const isMissing = error instanceof Error && error.message.startsWith('Stored archive not found:');
     res.status(isMissing ? 404 : 500).json({ error: isMissing ? 'Stored archive not found' : 'Failed to compare archives' });
+  }
+});
+
+app.get('/api/connections', async (req: Request, res: Response) => {
+  try {
+    const mntlUserId = typeof req.query.userId === 'string' ? req.query.userId : '';
+    if (!mntlUserId) return res.status(400).json({ error: 'MNTL user ID is required' });
+    const user = await mntlUserStore.getById(mntlUserId);
+    if (!user) return res.status(404).json({ error: 'MNTL profile not found' });
+    const connections = await archiveStore.getMntlConnections(mntlUserId);
+    return res.json({ connections, count: connections.length });
+  } catch (error) {
+    console.error('MNTL connection lookup error:', error);
+    return res.status(500).json({ error: 'Failed to fetch MNTL connections' });
   }
 });
 

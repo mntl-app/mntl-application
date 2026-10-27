@@ -19,6 +19,7 @@ import { XAdapter } from '../src/adapters/x/XAdapter';
 import { ArchiveStore, compareArchives, StoredArchive } from '../src/etl/load/ArchiveStore';
 import { InMemoryDataLoader } from '../src/etl/load/DataLoader';
 import { clearDevelopmentArchives } from '../src/etl/load/DevelopmentArchiveCleanup';
+import { MntlUserStore } from '../src/etl/load/MntlUserStore';
 import { LikeSchema, PostSchema } from '../src/types/schemas';
 
 function createPost(originalPlatformId: string, content: string) {
@@ -42,14 +43,17 @@ function createLike(postId: string, postText?: string) {
 test('clears stored archives and uploaded ZIPs only for development startup', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'development-archive-cleanup-test-'));
   const uploads = join(directory, 'uploads');
+  const mntlUsers = join(directory, 'data', 'mntl-users.json');
   const archives = join(directory, 'data', 'archives');
   const media = join(directory, 'data', 'media');
   mkdirSync(uploads);
+  mkdirSync(join(directory, 'data'), { recursive: true });
   mkdirSync(archives, { recursive: true });
   mkdirSync(join(media, 'b'.repeat(32)), { recursive: true });
   mkdirSync(join(media, 'keep-me'), { recursive: true });
   writeFileSync(join(uploads, 'a'.repeat(32)), 'uploaded ZIP');
   writeFileSync(join(uploads, 'keep-me.txt'), 'unrelated upload file');
+  writeFileSync(mntlUsers, 'prototype MNTL profiles');
   writeFileSync(join(archives, 'archive-1.json'), 'stored archive');
   writeFileSync(join(archives, 'archive-1.json.123.tmp'), 'temporary archive');
   writeFileSync(join(archives, 'keep-me.txt'), 'unrelated file');
@@ -60,8 +64,9 @@ test('clears stored archives and uploaded ZIPs only for development startup', as
     assert.equal(await clearDevelopmentArchives(directory, 'production'), 0);
     assert.equal(existsSync(join(archives, 'archive-1.json')), true);
 
-    assert.equal(await clearDevelopmentArchives(directory, 'development'), 4);
+    assert.equal(await clearDevelopmentArchives(directory, 'development'), 5);
     assert.equal(existsSync(join(uploads, 'a'.repeat(32))), false);
+    assert.equal(existsSync(mntlUsers), false);
     assert.equal(existsSync(join(archives, 'archive-1.json')), false);
     assert.equal(existsSync(join(archives, 'archive-1.json.123.tmp')), false);
     assert.equal(existsSync(join(media, 'b'.repeat(32))), false);
@@ -229,6 +234,16 @@ test('downloads only allowlisted TikTok video links into archive media storage',
     await assert.rejects(
       redirectDownloader.downloadOwnPostedVideos([post], 'c'.repeat(32)),
       /approved HTTPS host/
+    );
+
+    const timeoutDownloader = new TikTokMediaDownloader(join(directory, 'timeout'), async () => {
+      throw new DOMException('The operation was aborted', 'AbortError');
+    });
+    const [postWithRemoteUrl] = await timeoutDownloader.downloadOwnPostedVideos([post], 'd'.repeat(32));
+    assert.deepEqual(postWithRemoteUrl.mediaUrls, post.mediaUrls);
+    assert.equal(
+      existsSync(join(directory, 'timeout', 'd'.repeat(32), 'video-0.mp4')),
+      false
     );
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -655,6 +670,383 @@ test('persists account archives and matches relationships and likes across accou
   }
 });
 
+test('creates unique prototype MNTL handles without case-sensitive duplicates', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'mntl-user-store-test-'));
+  const store = new MntlUserStore(join(directory, 'mntl-users.json'));
+
+  try {
+    const user = await store.create('mntl_user1');
+    assert.equal(user.handle, 'mntl_user1');
+    assert.equal((await store.getById(user.userId))?.normalizedHandle, 'mntl_user1');
+    await assert.rejects(store.create('MNTL_USER1'), /already taken/);
+    await assert.rejects(store.create('bad-handle'), /3-30 characters/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('aggregates cross-platform archive matches into one MNTL connection', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'mntl-connections-test-'));
+  const store = new ArchiveStore(directory);
+  const archives: StoredArchive[] = [
+    {
+      archiveId: 'alice-instagram',
+      ownerId: 'alice_ig',
+      ownerHandle: 'alice_ig',
+      mntlUserId: 'alice-id',
+      mntlHandle: 'mntl_alice',
+      platform: 'instagram',
+      importedAt: '2026-01-01T00:00:00.000Z',
+      followers: [],
+      following: ['bob_ig'],
+      posts: [],
+      likes: [],
+    },
+    {
+      archiveId: 'alice-x',
+      ownerId: '1001',
+      ownerHandle: 'alice_x',
+      mntlUserId: 'alice-id',
+      mntlHandle: 'mntl_alice',
+      platform: 'x',
+      importedAt: '2026-01-02T00:00:00.000Z',
+      followers: [],
+      following: ['2002'],
+      posts: [],
+      likes: [],
+    },
+    {
+      archiveId: 'bob-instagram',
+      ownerId: 'bob_ig',
+      ownerHandle: 'bob_ig',
+      mntlUserId: 'bob-id',
+      mntlHandle: 'mntl_bob',
+      platform: 'instagram',
+      importedAt: '2026-01-03T00:00:00.000Z',
+      followers: ['alice_ig'],
+      following: ['alice_ig'],
+      posts: [],
+      likes: [],
+    },
+    {
+      archiveId: 'bob-x',
+      ownerId: '2002',
+      ownerHandle: 'bob_x',
+      mntlUserId: 'bob-id',
+      mntlHandle: 'mntl_bob',
+      platform: 'x',
+      importedAt: '2026-01-04T00:00:00.000Z',
+      followers: ['1001'],
+      following: ['1001'],
+      posts: [],
+      likes: [],
+    },
+  ];
+
+  try {
+    for (const archive of archives) await store.save(archive);
+    for (const archive of archives) {
+      await store.saveSelection(archive.archiveId, {
+        postIds: [],
+        followers: archive.followers,
+        following: archive.following,
+      });
+    }
+    assert.deepEqual(await store.getMntlConnections('alice-id'), [{
+      mntlUserId: 'bob-id',
+      mntlHandle: 'mntl_bob',
+      platforms: [
+        { platform: 'instagram', youFollowThem: true, theyFollowYou: true },
+        { platform: 'x', youFollowThem: true, theyFollowYou: true },
+      ],
+    }]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('shows matched third-party activity before MNTL verification', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'verified-activity-test-'));
+  const store = new ArchiveStore(directory);
+  const alice: StoredArchive = {
+    archiveId: 'alice-instagram-verified',
+    ownerId: 'alice_ig',
+    ownerHandle: 'alice_ig',
+    mntlUserId: 'alice-id',
+    mntlHandle: 'mntl_alice',
+    platform: 'instagram',
+    importedAt: '2026-01-01T00:00:00.000Z',
+    followers: [],
+    following: ['bob_ig'],
+    posts: [],
+    likes: [LikeSchema.parse({
+      userId: 'alice_ig',
+      postId: 'bob-post',
+      platform: 'instagram',
+      likedAt: new Date('2026-01-02T00:00:00.000Z'),
+    })],
+  };
+  const bob: StoredArchive = {
+    archiveId: 'bob-instagram-verified',
+    ownerId: 'bob_ig',
+    ownerHandle: 'bob_ig',
+    mntlUserId: 'bob-id',
+    mntlHandle: 'mntl_bob',
+    platform: 'instagram',
+    importedAt: '2026-01-03T00:00:00.000Z',
+    followers: [],
+    following: [],
+    posts: [{
+      ...createPost('bob-post', 'Bob’s shared post'),
+      mediaUrls: ['/api/media?entry=bob.jpg'],
+      mediaTypes: ['image'],
+    }],
+    likes: [],
+  };
+
+  try {
+    await store.save(alice);
+    await store.save(bob);
+    await store.saveSelection(alice.archiveId, {
+      postIds: [],
+      followers: [],
+      following: ['bob_ig'],
+    });
+    const [activity] = await store.getMntlActivities('alice-id');
+    assert.equal(activity.type, 'like');
+    assert.equal(activity.target.ownerHandle, 'mntl_bob');
+    assert.equal(activity.target.text, 'Bob’s shared post');
+    assert.deepEqual(activity.target.mediaUrls, ['/api/media?entry=bob.jpg']);
+    assert.deepEqual(await store.getMntlConnections('alice-id'), [{
+      mntlUserId: 'bob-id',
+      mntlHandle: 'mntl_bob',
+      platforms: [{ platform: 'instagram', youFollowThem: true, theyFollowYou: false }],
+    }]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('shows likes and comments even when their target posts have not been uploaded', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'unmatched-activity-test-'));
+  const store = new ArchiveStore(directory);
+  const alice: StoredArchive = {
+    archiveId: 'alice-instagram-unmatched',
+    ownerId: 'alice_ig',
+    ownerHandle: 'alice_ig',
+    mntlUserId: 'alice-id',
+    mntlHandle: 'mntl_alice',
+    platform: 'instagram',
+    importedAt: '2026-01-01T00:00:00.000Z',
+    followers: [],
+    following: ['bob_ig'],
+    posts: [],
+    likes: [LikeSchema.parse({
+        userId: 'alice_ig',
+        postId: 'not-uploaded-yet',
+        platform: 'instagram',
+        likedAt: new Date('2026-01-02T00:00:00.000Z'),
+      })],
+    comments: [{
+      originalPlatformId: 'comment-not-uploaded-yet',
+      platform: 'instagram',
+      postId: 'another-post-not-uploaded-yet',
+      userId: 'alice_ig',
+      content: 'Comment on a post not uploaded yet',
+      createdAt: new Date('2026-01-02T00:00:00.000Z'),
+      likesCount: 0,
+    }],
+  };
+
+  try {
+    await store.save(alice);
+    const activities = await store.getMntlActivities('alice-id');
+    assert.deepEqual(activities.map(activity => activity.type).sort(), ['comment', 'like']);
+    assert.ok(activities.every(activity => activity.target.type === 'unknown'));
+    assert.ok(activities.every(activity => !activity.target.ownerMntlUserId));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('does not expose discovered connections when a platform identity maps to multiple MNTL profiles', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'ambiguous-relationship-claim-test-'));
+  const store = new ArchiveStore(directory);
+  const alice: StoredArchive = {
+    archiveId: 'alice-instagram-ambiguous',
+    ownerId: 'alice_ig',
+    ownerHandle: 'alice_ig',
+    mntlUserId: 'alice-id',
+    mntlHandle: 'mntl_alice',
+    platform: 'instagram',
+    importedAt: '2026-01-01T00:00:00.000Z',
+    followers: [],
+    following: ['bob_ig'],
+    posts: [],
+    likes: [],
+  };
+  const bob: StoredArchive = {
+    archiveId: 'bob-instagram-ambiguous',
+    ownerId: 'bob_ig',
+    ownerHandle: 'bob_ig',
+    mntlUserId: 'bob-id',
+    mntlHandle: 'mntl_bob',
+    platform: 'instagram',
+    importedAt: '2026-01-02T00:00:00.000Z',
+    followers: [],
+    following: [],
+    posts: [],
+    likes: [],
+  };
+  const duplicate: StoredArchive = {
+    ...bob,
+    archiveId: 'duplicate-bob-instagram-ambiguous',
+    mntlUserId: 'other-id',
+    mntlHandle: 'mntl_other',
+  };
+
+  try {
+    await store.save(alice);
+    await store.save(bob);
+    await store.save(duplicate);
+    await store.saveSelection(alice.archiveId, {
+      postIds: [],
+      followers: [],
+      following: ['bob_ig'],
+    });
+
+    assert.deepEqual(await store.getMntlConnections('alice-id'), []);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('normalizes likes and comments from linked archives into one activity format', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'mntl-activity-test-'));
+  const store = new ArchiveStore(directory);
+  const instagramPost = {
+    ...createPost('instagram-post', 'A shared photo'),
+    postType: 'post' as const,
+  };
+  const xPost = PostSchema.parse({
+    originalPlatformId: 'x-post',
+    platform: 'x',
+    postType: 'text',
+    content: 'A shared thought',
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+  });
+  const xReel = PostSchema.parse({
+    originalPlatformId: 'x-reel',
+    platform: 'x',
+    postType: 'reel',
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+  });
+  const xReply = PostSchema.parse({
+    originalPlatformId: 'x-reply',
+    platform: 'x',
+    isReply: true,
+    replyToPostId: 'x-post',
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+  });
+
+  try {
+    await store.save({
+      archiveId: 'alice-instagram-activity',
+      ownerId: 'alice_ig',
+      ownerHandle: 'alice_ig',
+      mntlUserId: 'alice-id',
+      mntlHandle: 'mntl_alice',
+      platform: 'instagram',
+      importedAt: '2026-01-01T00:00:00.000Z',
+      followers: [],
+      following: [],
+      posts: [instagramPost],
+      likes: [LikeSchema.parse({
+        userId: 'alice_ig',
+        postId: 'instagram-post',
+        platform: 'instagram',
+        likedAt: new Date('2026-01-02T00:00:00.000Z'),
+      })],
+    });
+    await store.save({
+      archiveId: 'alice-x-activity',
+      ownerId: 'alice_x',
+      ownerHandle: 'alice_x',
+      mntlUserId: 'alice-id',
+      mntlHandle: 'mntl_alice',
+      platform: 'x',
+      importedAt: '2026-01-03T00:00:00.000Z',
+      followers: [],
+      following: [],
+      posts: [xPost, xReel, xReply],
+      likes: [
+        LikeSchema.parse({
+          userId: 'alice_x',
+          postId: 'x-reel',
+          platform: 'x',
+          likedAt: new Date('2026-01-03T00:00:00.000Z'),
+        }),
+        LikeSchema.parse({
+          userId: 'alice_x',
+          postId: 'x-reply',
+          platform: 'x',
+          likedAt: new Date('2026-01-03T00:00:00.000Z'),
+        }),
+      ],
+      comments: [{
+        originalPlatformId: 'x-comment',
+        platform: 'x',
+        postId: 'x-post',
+        userId: 'alice_x',
+        content: 'A shared reply',
+        createdAt: new Date('2026-01-04T00:00:00.000Z'),
+        likesCount: 0,
+      }],
+    });
+
+    const activities = await store.getMntlActivities('alice-id');
+    assert.equal(activities.length, 4);
+    assert.deepEqual(activities.map(activity => ({
+      type: activity.type,
+      platform: activity.platform,
+      targetType: activity.target.type,
+      targetText: activity.target.text,
+      actorId: activity.actor.mntlUserId,
+    })), [
+      {
+        type: 'comment',
+        platform: 'x',
+        targetType: 'text',
+        targetText: 'A shared thought',
+        actorId: 'alice-id',
+      },
+      {
+        type: 'like',
+        platform: 'x',
+        targetType: 'reel',
+        targetText: undefined,
+        actorId: 'alice-id',
+      },
+      {
+        type: 'like',
+        platform: 'x',
+        targetType: 'reply',
+        targetText: undefined,
+        actorId: 'alice-id',
+      },
+      {
+        type: 'like',
+        platform: 'instagram',
+        targetType: 'post',
+        targetText: 'A shared photo',
+        actorId: 'alice-id',
+      },
+    ]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('resolves known X account IDs to handles and exposes handles in archive comparisons', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'x-owner-handle-test-'));
   const store = new ArchiveStore(directory);
@@ -711,7 +1103,7 @@ test('resolves known X account IDs to handles and exposes handles in archive com
   }
 });
 
-test('stores selected X relationships as exact-ID claims and requires confirmation by both accounts', async () => {
+test('stores selected X relationships as exact-ID claims without deciding in the migration tool', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'relationship-claims-test-'));
   const store = new ArchiveStore(directory);
   const alice: StoredArchive = {
@@ -791,32 +1183,6 @@ test('stores selected X relationships as exact-ID claims and requires confirmati
       ['source']
     );
 
-    const awaitingConfirmation = await store.confirmRelationshipClaim(
-      alice.archiveId,
-      incomingClaim.claimId,
-      'source',
-      'mntl-alice'
-    );
-    assert.equal(awaitingConfirmation.status, 'awaiting_confirmation');
-    await assert.rejects(
-      store.confirmRelationshipClaim(alice.archiveId, incomingClaim.claimId, 'target', 'mntl-alice'),
-      /two different MNTL users/
-    );
-    const confirmed = await store.confirmRelationshipClaim(
-      alice.archiveId,
-      incomingClaim.claimId,
-      'target',
-      'mntl-bob'
-    );
-    assert.equal(confirmed.status, 'confirmed');
-    const rejected = await store.rejectRelationshipClaim(
-      alice.archiveId,
-      outgoingClaim.claimId,
-      'target',
-      'mntl-charlie'
-    );
-    assert.equal(rejected.status, 'rejected');
-
     const deselected = await store.saveSelection(alice.archiveId, {
       postIds: [],
       followers: [],
@@ -824,11 +1190,11 @@ test('stores selected X relationships as exact-ID claims and requires confirmati
     });
     assert.equal(
       deselected.relationshipClaims?.find(claim => claim.claimId === incomingClaim.claimId)?.status,
-      'confirmed'
+      'withdrawn'
     );
     assert.equal(
       deselected.relationshipClaims?.find(claim => claim.claimId === outgoingClaim.claimId)?.status,
-      'rejected'
+      'withdrawn'
     );
     assert.equal(
       deselected.relationshipClaims?.find(claim => claim.claimId === pendingWithdrawnClaim.claimId)?.status,

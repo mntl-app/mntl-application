@@ -112,9 +112,18 @@ The server will start on port 3000 (or the port specified in `.env`).
 The tool uses an in-memory queue by default. This requires no external dependencies and is perfect for development and testing.
 git stat
 When `NODE_ENV=development`, each server startup clears app-managed uploaded
-archives in `uploads/` and stored archive JSON/temp files in `data/archives/`.
-This keeps development runs ready for a fresh import. Other files and all
+archives in `uploads/`, stored archive JSON/temp files in `data/archives/`,
+downloaded archive media, and the prototype MNTL handle registry. This keeps
+development runs ready for a fresh signup and import. Other files and all
 archive data in non-development environments are left untouched.
+
+MNTL prototype profiles are stored separately in `data/mntl-users.json` and
+cleared on development startup. The browser does not persist the selected
+handle across page reloads. A profile handle is not verified and does not
+provide authentication. Each imported archive stores the selected MNTL profile
+ID and handle alongside its platform-specific account identity. Connection
+results group linked archive matches by MNTL profile and list each matching
+platform once.
 
 ### Production Mode (with Redis)
 For production environments with multiple workers, use BullMQ with Redis:
@@ -146,6 +155,28 @@ const jobQueue = JobQueue.getInstance();
 
 ## API Endpoints
 
+### Create a prototype MNTL profile
+Create a profile before uploading an archive. Handles are unique without
+regard to case and may contain 3-30 letters, numbers, or underscores.
+
+**Endpoint**: `POST /api/users`
+
+**Request**:
+```json
+{ "handle": "mntl_user1" }
+```
+
+### Get a prototype MNTL profile
+
+**Endpoint**: `GET /api/users/:userId`
+
+### Get normalized MNTL activity
+Returns all likes and comments from the profile's linked archives in a single
+common activity format. Known target posts include their normalized type and
+owning MNTL profile when that archive is available.
+
+**Endpoint**: `GET /api/users/:userId/activity`
+
 ### Upload Archive
 Upload a social media archive ZIP file.
 
@@ -156,7 +187,7 @@ Upload a social media archive ZIP file.
 - Content-Type: `multipart/form-data`
 - Body:
   - `archive`: ZIP file (max 500MB)
-  - `userId`: User identifier (optional)
+  - `mntlUserId`: ID returned when creating the MNTL profile
 
 **Response**:
 ```json
@@ -167,6 +198,12 @@ Upload a social media archive ZIP file.
   "message": "Archive uploaded and migration job started"
 }
 ```
+
+### Get deduplicated MNTL connections
+Returns one record per linked MNTL profile, with the platforms where selected
+archive relationships matched.
+
+**Endpoint**: `GET /api/connections?userId=:mntlUserId`
 
 ### Get Job Status
 Check the status of a migration job.
@@ -216,23 +253,21 @@ archive evidence; importing one does not create or confirm an MNTL follow.
 X identities are matched by exact exported account ID. Instagram and TikTok
 identities whose relationship exports contain usernames are matched by a
 case-insensitive, `@`-independent handle; other identities use an exact
-platform account ID unless a known handle is available. Matching returns
-pending claims for either the source or target account as candidates for the
-MNTL application to present.
+platform account ID unless a known handle is available. Saving a selection
+records the relationship reported by that profile's archive. When the other
+account has uploaded a matching archive under a different MNTL profile, the
+migration tool shows the discovered MNTL handle and matching platform(s).
+Ambiguous platform identities that map to multiple MNTL profiles are not shown
+as matches.
+
 Claim records support pending identity match, awaiting confirmation, confirmed,
-rejected, and withdrawn states, with separate source/target MNTL user
-confirmations. The archive store only marks a claim confirmed after two
-different MNTL user IDs have confirmed it. The future MNTL application must
-authenticate and authorize each user before recording their confirmation;
-handle matches are not proof of account ownership.
+rejected, and withdrawn states. Accepting or rejecting a discovered connection
+is not part of this migration tool; those decisions belong in the MNTL app.
+The tool only displays archive-based matches and does not apply follows.
 
-**Endpoint**: `GET /api/archives/:archiveId/relationship-claims`
-
-Returns the claims generated from the archive's saved selection. The store's
-`findRelationshipClaimsForIdentity` method finds pending claims matching either
-the source or target identity and identifies which side matched. These records
-are prepared locally by this migration tool; delivery to signed-in MNTL users
-requires integration with the MNTL application.
+`GET /api/archives/:archiveId/relationship-claims` returns claims generated
+from an archive's saved selection. `GET /api/connections?userId=:userId`
+returns discovered connections grouped by MNTL profile and matching platform.
 
 ### Fetch posts and replies
 `GET /api/data/posts` returns non-reply posts and reels. `GET /api/data/replies`
@@ -250,17 +285,21 @@ URL-derived shortcode is retained separately as `postShortcode`.
 
 `GET /api/data/comments` returns comments included in the uploaded archive.
 TikTok comments are read from `Comment.Comments.CommentsList` in its single-file
-export. Both imported likes and comments are shown in separate tabs on the
-migration review summary; they are stored for reference and are not currently
-selection controls or transferred to MNTL.
+export. `GET /api/users/:userId/activity` returns likes and comments from all
+archives linked to a MNTL profile in one common format. Each activity has a
+common type, actor, target post ID/type/text/URL, source platform, and timestamp;
+known target posts are enriched with their normalized post type and MNTL owner.
 
-Archive comparisons also report likes and comments from both accounts that
-reference the same post ID in the `Matched activity` panel. TikTok video IDs
-are extracted from direct `/video/<id>` links, including comment
-`originalPostUrl` values. This can match interactions even when the target
-account's archive does not contain the post itself. TikTok's own-post media
-links may omit the public video ID, so those posts cannot be matched by ID
-unless the export provides a direct video link.
+The review page displays all imported likes and comments in separate tabs,
+including activity whose target post has not been uploaded or matched yet.
+Matched activities show the normalized post or reel and then the like or
+comment; unmatched activities are labeled and include an original-post link
+when the archive provides one. The migration tool displays this activity, while
+MNTL decides whether to finalize it. Likes and comments are not selection
+controls or transferred directly to MNTL. TikTok video IDs are extracted from direct
+`/video/<id>` links, including comment `originalPostUrl` values. TikTok's
+own-post media links may omit the public video ID, so those posts cannot be
+matched by ID unless the export provides a direct video link.
 
 The default loader also stores data in process memory, but each completed account
 archive is saved locally as a JSON file in `data/archives/`. These files persist
@@ -268,18 +307,21 @@ across server restarts and are used for account-to-account comparisons.
 Downloaded TikTok videos are stored under `data/media/` alongside their archive
 records. Other archive media is served from the retained uploaded archive
 through `/api/media`; those uploaded archives must remain available while their
-posts are displayed. TikTok export video links are signed and may expire, so
-re-export the data from TikTok if a download fails.
+posts are displayed. TikTok export video links are signed and may expire. If a
+TikTok video download times out, the archive import continues and keeps the
+original URL; the video may not remain available after its signed link expires.
 
 After an archive is processed, the web app guides the user through a three-step
 selection wizard: posts (with captions and media), followers, then following.
 Follower and following lists can be searched. All items are selected by default,
 and each step saves changes to the archive's JSON file before continuing.
-The review page lists the imported likes and comments alongside selected posts,
-followers and following, and matched accounts and likes. The likes and comments
-tabs show the records present in the uploaded archive; an empty comments list is
-reported as no comments included. The user confirms the selection to save it and
-complete the flow. They can then upload another platform archive;
+The review page groups discovered MNTL matches into one list, showing each
+person's MNTL handle, matching platform(s), and relationship direction. The
+migration tool has no accept/reject controls; users make those decisions in the
+MNTL app. Likes and comments from the profile's uploaded archives appear in
+separate tabs using one normalized activity format. The user confirms the
+selection to save it and complete the flow. They can then
+upload another platform archive;
 platforms already uploaded in the same browser tab are excluded from that flow.
 Comments are not included in migration comparisons.
 

@@ -7,6 +7,7 @@ import {
   NormalizedComment,
   Platform,
 } from '../../types/schemas';
+import { normalizeMntlActivities } from './ActivityNormalizer';
 
 export type RelationshipClaimStatus =
   | 'pending_identity_match'
@@ -38,7 +39,7 @@ export interface RelationshipClaim {
     value: string;
   };
   status: RelationshipClaimStatus;
-  verified: false;
+  verified: boolean;
   evidence: {
     type: 'user_provided_archive';
     archiveId: string;
@@ -67,6 +68,8 @@ export interface StoredArchive {
   archiveId: string;
   ownerId: string;
   ownerHandle?: string;
+  mntlUserId?: string;
+  mntlHandle?: string;
   platform: Platform;
   importedAt: string;
   followers: string[];
@@ -88,6 +91,8 @@ export interface ArchiveComparison {
   archiveId: string;
   ownerId: string;
   ownerHandle?: string;
+  mntlUserId?: string;
+  mntlHandle?: string;
   platform: Platform;
   follows: 'following' | 'follower' | 'mutual' | null;
   youFollowThem: boolean;
@@ -126,6 +131,16 @@ export interface ArchiveComparison {
       postUrl?: string;
       occurredAt?: Date;
     }>;
+  }>;
+}
+
+export interface MntlConnection {
+  mntlUserId: string;
+  mntlHandle: string;
+  platforms: Array<{
+    platform: Platform;
+    youFollowThem: boolean;
+    theyFollowYou: boolean;
   }>;
 }
 
@@ -324,6 +339,8 @@ export function compareArchives(
     archiveId: other.archiveId,
     ownerId: other.ownerId,
     ownerHandle: other.ownerHandle?.trim().replace(/^@/, ''),
+    mntlUserId: other.mntlUserId,
+    mntlHandle: other.mntlHandle,
     platform: other.platform,
     youFollowThem: currentFollowsOther,
     theyFollowYou: otherFollowsCurrent,
@@ -510,79 +527,6 @@ export class ArchiveStore {
     );
   }
 
-  async confirmRelationshipClaim(
-    archiveId: string,
-    claimId: string,
-    side: 'source' | 'target',
-    mntlUserId: string
-  ): Promise<RelationshipClaim> {
-    const archive = await this.get(archiveId);
-    if (!archive) throw new Error(`Stored archive not found: ${archiveId}`);
-    const claims = archive.relationshipClaims || [];
-    const claimIndex = claims.findIndex(claim => claim.claimId === claimId);
-    if (claimIndex < 0) throw new Error(`Relationship claim not found: ${claimId}`);
-
-    const claim = claims[claimIndex];
-    if (claim.status === 'withdrawn' || claim.status === 'rejected') {
-      throw new Error(`Cannot confirm a ${claim.status} relationship claim`);
-    }
-    const normalizedMntlUserId = mntlUserId.trim();
-    if (!normalizedMntlUserId) throw new Error('MNTL user ID is required');
-
-    const confirmations = {
-      ...claim.confirmations,
-      [side]: { mntlUserId: normalizedMntlUserId, confirmedAt: new Date().toISOString() },
-    };
-    if (
-      confirmations.source &&
-      confirmations.target &&
-      confirmations.source.mntlUserId === confirmations.target.mntlUserId
-    ) {
-      throw new Error('Relationship claim must be confirmed by two different MNTL users');
-    }
-
-    const updatedClaim: RelationshipClaim = {
-      ...claim,
-      confirmations,
-      status: confirmations.source && confirmations.target ? 'confirmed' : 'awaiting_confirmation',
-      updatedAt: new Date().toISOString(),
-    };
-    claims[claimIndex] = updatedClaim;
-    archive.relationshipClaims = claims;
-    await this.save(archive);
-    return updatedClaim;
-  }
-
-  async rejectRelationshipClaim(
-    archiveId: string,
-    claimId: string,
-    side: 'source' | 'target',
-    mntlUserId: string
-  ): Promise<RelationshipClaim> {
-    const archive = await this.get(archiveId);
-    if (!archive) throw new Error(`Stored archive not found: ${archiveId}`);
-    const claims = archive.relationshipClaims || [];
-    const claimIndex = claims.findIndex(claim => claim.claimId === claimId);
-    if (claimIndex < 0) throw new Error(`Relationship claim not found: ${claimId}`);
-    const claim = claims[claimIndex];
-    if (claim.status === 'withdrawn' || claim.status === 'confirmed' || claim.status === 'rejected') {
-      throw new Error(`Cannot reject a ${claim.status} relationship claim`);
-    }
-    const normalizedMntlUserId = mntlUserId.trim();
-    if (!normalizedMntlUserId) throw new Error('MNTL user ID is required');
-
-    const updatedClaim: RelationshipClaim = {
-      ...claim,
-      status: 'rejected',
-      rejection: { side, mntlUserId: normalizedMntlUserId, rejectedAt: new Date().toISOString() },
-      updatedAt: new Date().toISOString(),
-    };
-    claims[claimIndex] = updatedClaim;
-    archive.relationshipClaims = claims;
-    await this.save(archive);
-    return updatedClaim;
-  }
-
   async compare(archiveId: string): Promise<ArchiveComparison[]> {
     const archives = await this.list();
     const current = archives.find(archive => archive.archiveId === archiveId);
@@ -593,7 +537,9 @@ export class ArchiveStore {
       const owner = normalizeUsername(archive.ownerId);
       if (
         archive.platform === current.platform &&
-        owner !== normalizeUsername(current.ownerId) &&
+        (current.mntlUserId
+          ? archive.mntlUserId && archive.mntlUserId !== current.mntlUserId
+          : owner !== normalizeUsername(current.ownerId)) &&
         !latestArchiveByOwner.has(owner)
       ) {
         latestArchiveByOwner.set(owner, archive);
@@ -606,6 +552,126 @@ export class ArchiveStore {
         current.selection || defaultSelection(current),
         archive.selection || defaultSelection(archive)
       ));
+  }
+
+  async getMntlConnections(mntlUserId: string): Promise<MntlConnection[]> {
+    const archives = await this.list();
+    const latestArchiveByAccount = new Map<string, StoredArchive>();
+    for (const archive of archives) {
+      if (!archive.mntlUserId) continue;
+      const key = `${archive.mntlUserId}\u0000${archive.platform}\u0000${normalizeAccountId(archive.platform, archive.ownerId)}`;
+      if (!latestArchiveByAccount.has(key)) latestArchiveByAccount.set(key, archive);
+    }
+
+    const accountArchives = [...latestArchiveByAccount.values()];
+    const connections = new Map<string, MntlConnection>();
+
+    for (const sourceArchive of accountArchives) {
+      if (!sourceArchive.mntlUserId || !sourceArchive.mntlHandle) continue;
+      for (const claim of sourceArchive.relationshipClaims || []) {
+        if (
+          (claim.status !== 'awaiting_confirmation' && claim.status !== 'confirmed') ||
+          claim.confirmations.source?.mntlUserId !== sourceArchive.mntlUserId
+        ) continue;
+        const matchingTargetUsers = this.matchingTargetUserIds(archives, claim);
+        if (matchingTargetUsers.length !== 1) continue;
+        const targetArchive = accountArchives.find(candidate =>
+          candidate.platform === claim.platform &&
+          candidate.mntlUserId === matchingTargetUsers[0] &&
+          candidate.mntlUserId !== sourceArchive.mntlUserId &&
+          this.identityMatchesArchive(claim.targetIdentityMatch, candidate)
+        );
+        if (!targetArchive?.mntlUserId || !targetArchive.mntlHandle) continue;
+
+        let currentUserFollows = false;
+        let otherUserFollows = false;
+        if (claim.direction === 'source_follows_target') {
+          currentUserFollows = sourceArchive.mntlUserId === mntlUserId;
+          otherUserFollows = targetArchive.mntlUserId === mntlUserId;
+        } else {
+          otherUserFollows = sourceArchive.mntlUserId === mntlUserId;
+          currentUserFollows = targetArchive.mntlUserId === mntlUserId;
+        }
+        if (sourceArchive.mntlUserId !== mntlUserId && targetArchive.mntlUserId !== mntlUserId) {
+          continue;
+        }
+
+        const otherUserId = sourceArchive.mntlUserId === mntlUserId
+          ? targetArchive.mntlUserId
+          : sourceArchive.mntlUserId;
+        const otherHandle = sourceArchive.mntlUserId === mntlUserId
+          ? targetArchive.mntlHandle
+          : sourceArchive.mntlHandle;
+        let connection = connections.get(otherUserId);
+        if (!connection) {
+          connection = { mntlUserId: otherUserId, mntlHandle: otherHandle, platforms: [] };
+          connections.set(otherUserId, connection);
+        }
+        let platformMatch = connection.platforms.find(match => match.platform === claim.platform);
+        if (!platformMatch) {
+          platformMatch = {
+            platform: claim.platform,
+            youFollowThem: false,
+            theyFollowYou: false,
+          };
+          connection.platforms.push(platformMatch);
+        }
+        platformMatch.youFollowThem ||= currentUserFollows;
+        platformMatch.theyFollowYou ||= otherUserFollows;
+      }
+    }
+
+    return [...connections.values()]
+      .map(connection => ({
+        ...connection,
+        platforms: connection.platforms.sort((left, right) =>
+          left.platform.localeCompare(right.platform)
+        ),
+      }))
+      .sort((left, right) => left.mntlHandle.localeCompare(right.mntlHandle));
+  }
+
+  async getMntlActivities(mntlUserId: string) {
+    const archives = await this.list();
+    const mntlArchives = archives.filter(
+      (archive): archive is StoredArchive & { mntlUserId: string; mntlHandle: string } =>
+        Boolean(archive.mntlUserId && archive.mntlHandle)
+    );
+    const posts = mntlArchives.flatMap(archive =>
+      archive.posts.map(post => ({ archive, post }))
+    );
+    const activities = normalizeMntlActivities(
+      mntlArchives.filter(archive => archive.mntlUserId === mntlUserId),
+      posts
+    );
+    return activities;
+  }
+
+  private identityMatchesArchive(
+    identity: RelationshipClaim['sourceIdentityMatch'],
+    archive: StoredArchive
+  ): boolean {
+    if (identity.type === 'platform_account_id') {
+      return identity.value === archive.ownerId;
+    }
+    const handle = archive.ownerHandle ||
+      (archive.platform === 'instagram' || archive.platform === 'tiktok'
+        ? archive.ownerId
+        : undefined);
+    return Boolean(handle && normalizeAccountHandle(identity.value) === normalizeAccountHandle(handle));
+  }
+
+  private matchingTargetUserIds(
+    archives: StoredArchive[],
+    claim: RelationshipClaim
+  ): string[] {
+    return [...new Set(archives.flatMap(archive =>
+      archive.mntlUserId &&
+      archive.platform === claim.platform &&
+      this.identityMatchesArchive(claim.targetIdentityMatch, archive)
+        ? [archive.mntlUserId]
+        : []
+    ))];
   }
 
   private filePath(archiveId: string): string {
@@ -656,6 +722,16 @@ export class ArchiveStore {
         : archive.ownerHandle
           ? { type: 'handle' as const, value: normalizeAccountHandle(archive.ownerHandle) }
           : { type: 'platform_account_id' as const, value: archive.ownerId };
+      const confirmations: RelationshipClaim['confirmations'] = isReactivated
+        ? {}
+        : { ...(existing?.confirmations || {}) };
+      if (archive.mntlUserId && (!confirmations.source ||
+        confirmations.source.mntlUserId !== archive.mntlUserId)) {
+        confirmations.source = {
+          mntlUserId: archive.mntlUserId,
+          confirmedAt: now,
+        };
+      }
       const claim: RelationshipClaim = {
         claimId,
         relationshipKey,
@@ -672,16 +748,21 @@ export class ArchiveStore {
           handle: targetHandle,
         },
         targetIdentityMatch: identityMatch,
-        status: isReactivated ? 'pending_identity_match' :
-          existing?.status || 'pending_identity_match',
-        verified: false,
+        status: isReactivated
+          ? 'pending_identity_match'
+          : existing?.status === 'confirmed' || existing?.status === 'rejected'
+            ? existing.status
+            : archive.mntlUserId
+              ? 'awaiting_confirmation'
+              : existing?.status || 'pending_identity_match',
+        verified: existing?.verified || false,
         evidence: {
           type: 'user_provided_archive',
           archiveId: archive.archiveId,
           importedAt: archive.importedAt,
           selectedAt: isReactivated ? now : existing?.evidence.selectedAt || now,
         },
-        confirmations: isReactivated ? {} : existing?.confirmations || {},
+        confirmations,
         createdAt: existing?.createdAt || now,
         updatedAt: now,
       };

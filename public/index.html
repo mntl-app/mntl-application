@@ -117,6 +117,57 @@
             padding: clamp(20px, 5vw, 40px);
         }
 
+        .profile-card {
+            background: var(--card);
+            border: 1px solid var(--line);
+            border-radius: 24px;
+            padding: clamp(20px, 5vw, 40px);
+            margin-bottom: 16px;
+        }
+
+        .profile-card h2 {
+            margin-bottom: 8px;
+            font-family: 'Kanit', Impact, 'Arial Narrow', sans-serif;
+            font-size: 26px;
+            line-height: 1;
+            text-transform: uppercase;
+        }
+
+        .profile-field {
+            width: 100%;
+            margin: 8px 0 12px;
+            padding: 13px 16px;
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            background: var(--canvas);
+            color: var(--ink);
+            font: inherit;
+        }
+
+        .profile-note,
+        .profile-bar {
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .profile-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .profile-switch {
+            border: 0;
+            background: transparent;
+            color: var(--cobalt);
+            cursor: pointer;
+            font: inherit;
+            font-weight: 700;
+        }
+
         .upload-area {
             border: 1.5px dashed #c9c0b3;
             border-radius: 18px;
@@ -497,16 +548,14 @@
 
         .summary-tabs {
             display: flex;
-            flex-wrap: nowrap;
+            flex-wrap: wrap;
             gap: 8px;
-            overflow-x: auto;
             margin: 16px 0;
             padding-bottom: 5px;
-            scrollbar-width: thin;
         }
 
         .summary-tab {
-            flex: 0 0 auto;
+            flex: 0 1 auto;
         }
 
         .summary-counts {
@@ -862,7 +911,26 @@
             <p class="subtitle">Review and choose what you want to carry forward from your social archives.</p>
         </div>
 
-        <section class="upload-card" id="uploadCard" aria-label="Upload social archive">
+        <section class="profile-card" id="signupCard" aria-labelledby="signupHeading">
+            <h2 id="signupHeading">Sign up with a MNTL handle</h2>
+            <p class="subtitle">Your platform archives will be linked to this one MNTL identity.</p>
+            <form id="signupForm">
+                <label for="mntlHandleInput">MNTL handle</label>
+                <input class="profile-field" type="text" id="mntlHandleInput" name="handle"
+                    autocomplete="username" minlength="3" maxlength="30"
+                    pattern="[A-Za-z0-9_]{3,30}" placeholder="e.g. mntl_user1" required>
+                <p class="profile-note">Prototype profile only—there is no password or handle verification yet.</p>
+                <button class="btn" id="signupBtn" type="submit">Create MNTL profile</button>
+                <button class="btn btn-secondary" id="cancelSignupBtn" type="button" hidden>Cancel</button>
+            </form>
+        </section>
+
+        <div class="profile-bar" id="profileBar" hidden>
+            <span id="activeMntlHandle"></span>
+            <button class="profile-switch" id="switchProfileBtn" type="button">Use another handle</button>
+        </div>
+
+        <section class="upload-card" id="uploadCard" aria-label="Upload social archive" hidden>
             <div class="upload-area" id="uploadArea" role="button" tabindex="0" aria-label="Choose a ZIP archive">
                 <div class="upload-icon" aria-hidden="true">
                     <svg viewBox="0 0 24 24" fill="none">
@@ -979,22 +1047,18 @@
                 <div class="comparison-heading">
                     <div class="wizard-progress">Your migration summary</div>
                     <h2>Review your migration selection</h2>
-                    <p class="subtitle">Check the exact posts, followers, following, and like matches selected for your migration.</p>
+                    <p class="subtitle">Review your selected archive data, MNTL matches, and normalized activity.</p>
                 </div>
-                <div class="migration-notice">These are identified matches only. This app does not connect to MNTL or automatically apply follows or transfer likes.</div>
+                <div class="migration-notice">Matches are discovered from uploaded archive data. Accepting or rejecting a connection happens in the MNTL app, not in this migration tool.</div>
                 <div class="summary-counts" id="selectionCounts"></div>
                 <div class="summary-tabs">
                     <button class="summary-tab active" data-summary-tab="selectedPosts">Selected posts</button>
                     <button class="summary-tab" data-summary-tab="selectedReplies">Selected replies</button>
                     <button class="summary-tab" data-summary-tab="selectedFollowers">Selected followers</button>
                     <button class="summary-tab" data-summary-tab="selectedFollowing">Selected following</button>
-                    <button class="summary-tab" data-summary-tab="followingMatches">Matched following</button>
-                    <button class="summary-tab" data-summary-tab="followerMatches">Matched followers</button>
-                    <button class="summary-tab" data-summary-tab="importedLikes">Imported likes</button>
+                    <button class="summary-tab" data-summary-tab="matchesOnMntl">Matches on MNTL</button>
+                    <button class="summary-tab" data-summary-tab="likes">Likes</button>
                     <button class="summary-tab" data-summary-tab="comments">Comments</button>
-                    <button class="summary-tab" data-summary-tab="yourLikeMatches">Your likes on their posts</button>
-                    <button class="summary-tab" data-summary-tab="sharedPostInteractions">Matched activity</button>
-                    <button class="summary-tab" data-summary-tab="likeMatches">Matched likes</button>
                 </div>
                 <section class="summary-panel" id="selectedPosts">
                     <h3>Posts selected for migration</h3>
@@ -1012,33 +1076,20 @@
                     <h3>Accounts selected to follow</h3>
                     <div class="data-list" id="selectedFollowingList"></div>
                 </section>
-                <section class="summary-panel" id="followingMatches" hidden>
-                    <h3>Selected accounts you followed with matching saved archives</h3>
-                    <div class="data-list" id="followingMatchesList"></div>
+                <section class="summary-panel" id="matchesOnMntl" hidden>
+                    <h3>Connections found on MNTL</h3>
+                    <p class="subtitle">Each matched MNTL handle appears once, with the platforms where the connection was found.</p>
+                    <div class="data-list" id="matchesOnMntlList"></div>
                 </section>
-                <section class="summary-panel" id="followerMatches" hidden>
-                    <h3>Selected followers with matching saved archives</h3>
-                    <div class="data-list" id="followerMatchesList"></div>
-                </section>
-                <section class="summary-panel" id="importedLikes" hidden>
-                    <h3>Likes in this archive</h3>
-                    <div class="data-list" id="importedLikesList"></div>
+                <section class="summary-panel" id="likes" hidden>
+                    <h3>Likes</h3>
+                    <p class="subtitle">Imported likes are shown here. Post details are added when the post matches an uploaded archive.</p>
+                    <div class="data-list" id="likesList"></div>
                 </section>
                 <section class="summary-panel" id="comments" hidden>
-                    <h3>Comments in this archive</h3>
+                    <h3>Comments</h3>
+                    <p class="subtitle">Imported comments are shown here. Post details are added when the post matches an uploaded archive.</p>
                     <div class="data-list" id="commentsList"></div>
-                </section>
-                <section class="summary-panel" id="yourLikeMatches" hidden>
-                    <h3>Your likes matched to another account's selected posts</h3>
-                    <div class="data-list" id="yourLikeMatchesList"></div>
-                </section>
-                <section class="summary-panel" id="sharedPostInteractions" hidden>
-                    <h3>Both accounts interacted with the same post</h3>
-                    <div class="data-list" id="sharedPostInteractionsList"></div>
-                </section>
-                <section class="summary-panel" id="likeMatches" hidden>
-                    <h3>Likes matched to your selected posts</h3>
-                    <div class="data-list" id="likeMatchesList"></div>
                 </section>
                 <div class="wizard-navigation">
                     <button class="btn btn-secondary" id="summaryBackBtn">Back: following</button>
@@ -1082,7 +1133,9 @@
         let selectedFile = null;
         let currentJobId = null;
         let currentArchiveId = null;
+        let currentArchiveSummary = null;
         let currentPlatform = null;
+        let currentProfile = null;
         let progressInterval = null;
         let currentSelection = null;
         let selectionCatalog = { posts: [], replies: [], followers: [], following: [] };
@@ -1093,6 +1146,74 @@
         let serverInstanceId = null;
 
         updateAvailablePlatforms();
+
+        document.getElementById('signupForm').addEventListener('submit', async event => {
+            event.preventDefault();
+            const button = document.getElementById('signupBtn');
+            const handle = document.getElementById('mntlHandleInput').value.trim();
+            button.disabled = true;
+            button.textContent = 'Saving handle...';
+            hideError();
+            try {
+                const response = await fetch('/api/users', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ handle }),
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Could not create MNTL profile');
+                activateMntlProfile(data.user);
+            } catch (error) {
+                showError(error.message);
+            } finally {
+                button.disabled = false;
+                button.textContent = 'Create MNTL profile';
+            }
+        });
+
+        document.getElementById('switchProfileBtn').addEventListener('click', () => {
+            if (progressInterval) clearInterval(progressInterval);
+            currentJobId = null;
+            currentArchiveId = null;
+            selectedFile = null;
+            fileInput.value = '';
+            fileInfo.classList.remove('show');
+            uploadArea.hidden = false;
+            uploadBtn.hidden = false;
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = 'Start import';
+            progressSection.classList.remove('show');
+            document.getElementById('resultsSection').classList.remove('show');
+            document.getElementById('profileBar').hidden = true;
+            document.getElementById('uploadCard').hidden = true;
+            document.getElementById('signupCard').hidden = false;
+            document.getElementById('mntlHandleInput').value = '';
+            document.getElementById('cancelSignupBtn').hidden = false;
+        });
+
+        document.getElementById('cancelSignupBtn').addEventListener('click', () => {
+            document.getElementById('signupCard').hidden = true;
+            document.getElementById('cancelSignupBtn').hidden = true;
+            if (currentProfile) {
+                document.getElementById('profileBar').hidden = false;
+                document.getElementById('uploadCard').hidden = false;
+            }
+        });
+
+        function activateMntlProfile(profile) {
+            currentProfile = profile;
+            document.getElementById('activeMntlHandle').textContent = `Using MNTL handle @${profile.handle}`;
+            document.getElementById('profileBar').hidden = false;
+            document.getElementById('signupCard').hidden = true;
+            document.getElementById('cancelSignupBtn').hidden = true;
+            document.getElementById('uploadCard').hidden = false;
+            if (serverInstanceId) {
+                uploadedPlatforms = new Set(JSON.parse(
+                    sessionStorage.getItem(getUploadedPlatformStorageKey()) || '[]'
+                ));
+            }
+            renderAvailablePlatforms();
+        }
 
         uploadArea.addEventListener('click', () => fileInput.click());
         uploadArea.addEventListener('keydown', event => {
@@ -1154,11 +1275,12 @@
             if (!selectedFile) return;
 
             uploadBtn.disabled = true;
+            document.getElementById('switchProfileBtn').disabled = true;
             uploadBtn.textContent = 'Uploading archive...';
 
             const formData = new FormData();
             formData.append('archive', selectedFile);
-            formData.append('userId', 'web-user');
+            formData.append('mntlUserId', currentProfile.userId);
             formData.append('uploadedPlatforms', JSON.stringify([...uploadedPlatforms]));
             formData.append('serverInstanceId', serverInstanceId || '');
 
@@ -1194,6 +1316,7 @@
             } catch (error) {
                 showError(error.message);
                 uploadBtn.disabled = false;
+                document.getElementById('switchProfileBtn').disabled = false;
                 uploadBtn.textContent = 'Start import';
             }
         });
@@ -1216,12 +1339,13 @@
 
                     if (data.status === 'completed' || data.status === 'failed') {
                         clearInterval(progressInterval);
+                        document.getElementById('switchProfileBtn').disabled = false;
                         uploadBtn.disabled = false;
                         uploadBtn.textContent = 'Start import';
 
                         if (data.status === 'completed') {
                             uploadedPlatforms.add(currentPlatform);
-                            sessionStorage.setItem(uploadedPlatformStorageKey, JSON.stringify([...uploadedPlatforms]));
+                            sessionStorage.setItem(getUploadedPlatformStorageKey(), JSON.stringify([...uploadedPlatforms]));
                             renderAvailablePlatforms();
                             showSuccess('Archive processed. Review and confirm your selections to complete migration.');
                             progressSection.classList.remove('show');
@@ -1241,6 +1365,7 @@
                     }
                 } catch (error) {
                     clearInterval(progressInterval);
+                    document.getElementById('switchProfileBtn').disabled = false;
                     showError(error.message);
                     uploadBtn.disabled = false;
                     uploadBtn.textContent = 'Start import';
@@ -1296,7 +1421,7 @@
         }
 
         function getUploadedPlatformStorageKey() {
-            return `${uploadedPlatformStorageKey}:${serverInstanceId || 'uninitialized'}`;
+            return `${uploadedPlatformStorageKey}:${serverInstanceId || 'uninitialized'}:${currentProfile?.userId || 'uninitialized'}`;
         }
 
         function renderAvailablePlatforms() {
@@ -1377,29 +1502,31 @@
             button.textContent = 'Saving selections and preparing summary...';
             try {
                 await queueSelectionSave();
-                const response = await fetch('/api/compare', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ archiveId: currentArchiveId }),
-                });
-                const data = await response.json();
-                if (!response.ok) throw new Error(data.error || 'Comparison failed');
                 const summaryResponse = await fetch(`/api/data/summary?archiveId=${encodeURIComponent(currentArchiveId)}`);
                 const archiveSummary = await summaryResponse.json();
                 if (!summaryResponse.ok) {
                     throw new Error(archiveSummary.error || 'Failed to load archive summary');
                 }
-                const [likesResponse, commentsResponse] = await Promise.all([
-                    fetch(`/api/data/likes?archiveId=${encodeURIComponent(currentArchiveId)}`),
-                    fetch(`/api/data/comments?archiveId=${encodeURIComponent(currentArchiveId)}`),
+                currentArchiveSummary = archiveSummary;
+                const [connectionsResponse, activityResponse] = await Promise.all([
+                    fetch(`/api/connections?userId=${encodeURIComponent(currentProfile.userId)}`),
+                    fetch(`/api/users/${encodeURIComponent(currentProfile.userId)}/activity`),
                 ]);
-                const [likesData, commentsData] = await Promise.all([
-                    likesResponse.json(),
-                    commentsResponse.json(),
+                const [connectionsData, activityData] = await Promise.all([
+                    connectionsResponse.json(),
+                    activityResponse.json(),
                 ]);
-                if (!likesResponse.ok) throw new Error(likesData.error || 'Failed to load likes');
-                if (!commentsResponse.ok) throw new Error(commentsData.error || 'Failed to load comments');
-                renderMigrationSummary(data.comparisons, archiveSummary, likesData.likes, commentsData.comments);
+                if (!connectionsResponse.ok) {
+                    throw new Error(connectionsData.error || 'Failed to load MNTL connections');
+                }
+                if (!activityResponse.ok) {
+                    throw new Error(activityData.error || 'Failed to load MNTL activity');
+                }
+                renderMigrationSummary(
+                    archiveSummary,
+                    connectionsData.connections,
+                    activityData.activities
+                );
                 await goToWizardStep('summaryStep');
             } catch (error) {
                 showError(error.message);
@@ -1696,10 +1823,18 @@
             }).join('')}</div>`;
         }
 
-        function renderMigrationSummary(comparisons, archiveSummary, importedLikes, comments) {
-            const displayableComparisons = comparisons.filter(comparison =>
-                comparison.platform !== 'x' || comparison.ownerHandle
-            );
+        function renderExternalPostLink(value) {
+            if (!value) return '';
+            try {
+                const url = new URL(value);
+                if (url.protocol !== 'https:' && url.protocol !== 'http:') return '';
+                return `<a href="${escapeHtml(url.toString())}" target="_blank" rel="noopener noreferrer">Open original post</a>`;
+            } catch {
+                return '';
+            }
+        }
+
+        function renderMigrationSummary(archiveSummary, mntlConnections, activities) {
             const selectedPosts = (loadedTabData.posts?.posts || []).filter(post =>
                 currentSelection.postIds.includes(post.originalPlatformId)
             );
@@ -1711,28 +1846,6 @@
             );
             const selectedFollowing = (loadedTabData.following?.followRelations || []).filter(relation =>
                 currentSelection.following.includes(relation.followingId)
-            );
-            const matchingFollowing = displayableComparisons.filter(comparison => comparison.youFollowThem);
-            const matchingFollowers = displayableComparisons.filter(comparison => comparison.theyFollowYou);
-            const matchingLikes = displayableComparisons.flatMap(comparison =>
-                comparison.theyFollowYou
-                    ? comparison.theyLikeYourPosts.map(like => ({
-                        ...like,
-                        liker: comparison.ownerHandle || comparison.ownerId,
-                    }))
-                    : []
-            );
-            const yourLikeMatches = displayableComparisons.flatMap(comparison =>
-                comparison.likesOnTheirPosts.map(like => ({
-                    ...like,
-                    account: comparison.ownerHandle || comparison.ownerId,
-                }))
-            );
-            const sharedPostInteractions = displayableComparisons.flatMap(comparison =>
-                comparison.sharedPostInteractions.map(interaction => ({
-                    ...interaction,
-                    account: comparison.ownerHandle || comparison.ownerId,
-                }))
             );
             const selectedReels = selectedPosts.filter(post => post.postType === 'reel').length;
             const selectedTextPosts = selectedPosts.filter(post => post.postType === 'text').length;
@@ -1750,11 +1863,9 @@
                 ['Selected replies', selectedReplies.length],
                 ['Selected followers', selectedFollowers.length],
                 ['Selected following', selectedFollowing.length],
-                ['Imported likes', importedLikes.length],
-                ['Imported comments', comments.length],
-                ['Your likes matched to their posts', yourLikeMatches.length],
-                ['Matched post activity', sharedPostInteractions.length],
-                ['Matched likes', matchingLikes.length],
+                ['Matches on MNTL', mntlConnections.length],
+                ['Likes', activities.filter(activity => activity.type === 'like').length],
+                ['Comments', activities.filter(activity => activity.type === 'comment').length],
             ].map(([label, count]) => `
                 <div class="summary-count"><strong>${count}</strong><span>${label}</span></div>
             `).join('');
@@ -1814,85 +1925,83 @@
                     ? `${hiddenSelectedFollowing} selected X following ID(s) have no known handle yet, so they are hidden from this summary.`
                     : 'No accounts selected to follow.'}</div>`;
 
-            document.getElementById('followingMatchesList').innerHTML = renderAccountMatches(matchingFollowing);
-            document.getElementById('followerMatchesList').innerHTML = renderAccountMatches(matchingFollowers);
-            document.getElementById('importedLikesList').innerHTML = importedLikes.length
-                ? importedLikes.map(like => `
-                    <article class="data-item">
-                        <div class="data-item-header">
-                            <span class="data-item-platform">${escapeHtml(like.platform)}</span>
-                            <span class="data-item-date">${like.likedAt ? new Date(like.likedAt).toLocaleDateString() : 'Unknown date'}</span>
-                        </div>
-                        <div class="data-item-content">Liked post ID: <strong>${escapeHtml(like.postId)}</strong></div>
-                        ${like.postText ? `<div class="data-item-content">${escapeHtml(like.postText)}</div>` : ''}
-                        ${like.postUrl ? `<div class="data-item-content">Post URL: ${escapeHtml(like.postUrl)}</div>` : ''}
-                    </article>
-                `).join('')
-                : '<div class="no-data">No likes were included in this archive.</div>';
-            document.getElementById('commentsList').innerHTML = comments.length
-                ? comments.map(comment => `
-                    <article class="data-item">
-                        <div class="data-item-header">
-                            <span class="data-item-platform">${escapeHtml(comment.platform)}</span>
-                            <span class="data-item-date">${new Date(comment.createdAt).toLocaleDateString()}</span>
-                        </div>
-                        <div class="data-item-content">${escapeHtml(comment.content)}</div>
-                        <div class="data-item-metrics">
-                            <span class="data-item-metric">Comment ID: ${escapeHtml(comment.originalPlatformId)}</span>
-                            <span class="data-item-metric">Post ID: ${escapeHtml(comment.postId)}</span>
-                            <span class="data-item-metric">By: ${escapeHtml(comment.userId)}</span>
-                        </div>
-                        ${comment.postUrl ? `<div class="data-item-content">Post URL: ${escapeHtml(comment.postUrl)}</div>` : ''}
-                    </article>
-                `).join('')
-                : '<div class="no-data">No comments were included in this archive.</div>';
-            document.getElementById('yourLikeMatchesList').innerHTML = yourLikeMatches.length
-                ? yourLikeMatches.map(like => `
-                    <article class="data-item">
-                        <div class="data-item-content">You liked a post in <strong>@${escapeHtml(like.account)}</strong>'s archive</div>
-                        <div class="data-item-content">${escapeHtml(like.postCaption || `Post ID: ${like.postId}`)}</div>
-                        <div class="data-item-date">Matched by ${escapeHtml(like.matchType)}</div>
-                    </article>
-                `).join('')
-                : '<div class="no-data">No likes matched the other account’s selected posts by post ID or unique caption.</div>';
-            document.getElementById('sharedPostInteractionsList').innerHTML = sharedPostInteractions.length
-                ? sharedPostInteractions.map(match => `
-                    <article class="data-item">
-                        <div class="data-item-content">TikTok post ID: <strong>${escapeHtml(match.postId)}</strong></div>
-                        <div class="data-item-content">You: ${match.current.map(renderInteraction).join('; ')}</div>
-                        <div class="data-item-content">@${escapeHtml(match.account)}: ${match.other.map(renderInteraction).join('; ')}</div>
-                        ${[...match.current, ...match.other].find(interaction => interaction.postUrl)?.postUrl
-                            ? `<div class="data-item-content">Post URL: ${escapeHtml([...match.current, ...match.other].find(interaction => interaction.postUrl).postUrl)}</div>`
-                            : ''}
-                    </article>
-                `).join('')
-                : '<div class="no-data">No likes or comments from both archives point to the same post ID.</div>';
-            document.getElementById('likeMatchesList').innerHTML = matchingLikes.length
-                ? matchingLikes.map(like => `
-                    <article class="data-item">
-                        <div class="data-item-content"><strong>@${escapeHtml(like.liker)}</strong> liked your post</div>
-                        <div class="data-item-content">${escapeHtml(like.postCaption || `Post ID: ${like.postId}`)}</div>
-                        ${renderPostTypeBadge(like)}
-                        ${renderPostMedia(like)}
-                        <div class="data-item-date">Matched by ${escapeHtml(like.matchType)}</div>
-                    </article>
-                `).join('')
-                : '<div class="no-data">No selected posts have likes matched to a saved account that followed you. The archive data remains stored for future comparisons.</div>';
+            const discoveredConnections = mntlConnections.length
+                ? mntlConnections.map(renderMntlConnection).join('')
+                : '<div class="no-data">No MNTL connections found yet.</div>';
+            document.getElementById('matchesOnMntlList').innerHTML = discoveredConnections;
+            document.getElementById('likesList').innerHTML = renderActivityList(
+                activities.filter(activity => activity.type === 'like'),
+                'like'
+            );
+            document.getElementById('commentsList').innerHTML = renderActivityList(
+                activities.filter(activity => activity.type === 'comment'),
+                'comment'
+            );
         }
 
-        function renderInteraction(interaction) {
-            const kind = interaction.type === 'like' ? 'liked' : `commented: “${escapeHtml(interaction.content || '')}”`;
-            return `${kind}${interaction.occurredAt ? ` (${new Date(interaction.occurredAt).toLocaleDateString()})` : ''}`;
+        function renderActivityList(activities, type) {
+            return activities.length
+                ? activities.map(activity => {
+                    const matchedPost = Boolean(activity.target.ownerMntlUserId);
+                    return `
+                        <article class="data-item">
+                            <div class="data-item-header">
+                                <span class="data-item-platform">${escapeHtml(activity.platform)}</span>
+                                <span class="data-item-date">${activity.occurredAt
+                                    ? new Date(activity.occurredAt).toLocaleDateString()
+                                    : 'Date unknown'}</span>
+                            </div>
+                            <div class="data-item-content">
+                                ${matchedPost
+                                    ? `<strong>@${escapeHtml(activity.target.ownerHandle || 'unknown')}'s ${escapeHtml(activity.target.type)}</strong>`
+                                    : `<strong>${escapeHtml(activity.platform)} post not matched yet</strong>`}
+                                ${activity.target.text
+                                    ? `<div class="data-item-content">${escapeHtml(activity.target.text)}</div>`
+                                    : matchedPost ? '<div class="data-item-content">(No text)</div>' : ''}
+                                ${matchedPost ? renderPostMedia({
+                                    mediaUrls: activity.target.mediaUrls,
+                                    mediaTypes: activity.target.mediaTypes,
+                                }) : renderExternalPostLink(activity.target.url)}
+                                <div class="data-item-content">
+                                    ${type === 'like'
+                                        ? 'You liked this post.'
+                                        : `Your comment: “${escapeHtml(activity.content || '')}”`}
+                                </div>
+                            </div>
+                        </article>
+                    `;
+                }).join('')
+                : `<div class="no-data">No ${type === 'like' ? 'likes' : 'comments'} found in uploaded archives yet.</div>`;
         }
 
-        function renderAccountMatches(comparisons) {
-            return comparisons.length
-                ? comparisons.map(comparison => `
+        function renderMntlConnection(connection) {
+            const onlyYouFollow = connection.platforms
+                .filter(match => match.youFollowThem && !match.theyFollowYou)
+                .map(match => match.platform);
+            const onlyTheyFollow = connection.platforms
+                .filter(match => match.theyFollowYou && !match.youFollowThem)
+                .map(match => match.platform);
+            const mutual = connection.platforms
+                .filter(match => match.youFollowThem && match.theyFollowYou)
+                .map(match => match.platform);
+            const sentences = [];
+            if (onlyYouFollow.length) {
+                sentences.push(`You follow @${escapeHtml(connection.mntlHandle)} on ${onlyYouFollow.map(escapeHtml).join(', ')}.`);
+            }
+            if (onlyTheyFollow.length) {
+                sentences.push(`@${escapeHtml(connection.mntlHandle)} follows you on ${onlyTheyFollow.map(escapeHtml).join(', ')}.`);
+            }
+            if (mutual.length) {
+                sentences.push(`You and @${escapeHtml(connection.mntlHandle)} are mutual connections on ${mutual.map(escapeHtml).join(', ')}.`);
+            }
+            const platforms = connection.platforms.map(match => escapeHtml(match.platform)).join(', ');
+            return `
                     <article class="data-item">
-                        <div class="data-item-content"><strong>@${escapeHtml(comparison.ownerHandle || comparison.ownerId)}</strong> — matching uploaded archive found.</div>
+                        <div class="data-item-content"><strong>MNTL handle: @${escapeHtml(connection.mntlHandle)}</strong></div>
+                        <div class="data-item-content">Found on ${platforms}.</div>
+                        ${sentences.length ? `<div class="data-item-content">${sentences.join(' ')}</div>` : ''}
                     </article>
-                `).join('')
-                : '<div class="no-data">No matches found yet. The original archive data remains stored and can be compared when more accounts join.</div>';
+                `;
         }
     </script>
 </body>
