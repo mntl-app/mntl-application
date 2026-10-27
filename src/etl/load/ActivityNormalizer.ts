@@ -37,13 +37,6 @@ function stableActivityId(
     .digest('hex');
 }
 
-function publicPostId(platform: Platform, postId: string, url?: string): string {
-  if (platform === 'tiktok') {
-    return `${url || ''} ${postId}`.match(/\/video\/(\d+)/i)?.[1] || postId;
-  }
-  return postId;
-}
-
 function findTargetPost(
   platform: Platform,
   postId: string,
@@ -52,7 +45,7 @@ function findTargetPost(
   text: string | undefined,
   posts: Array<{ archive: ActivityArchive; post: NormalizedPost }>
 ): { archive: ActivityArchive; post: NormalizedPost } | undefined {
-  const resolvedId = publicPostId(platform, postId, url);
+  const resolvedId = postId;
   const instagramShortcode = url?.match(/\/(?:p|reel|reels|tv)\/([^/?]+)/i)?.[1];
   const byId = posts.find(entry =>
     entry.post.platform === platform &&
@@ -91,6 +84,8 @@ export function normalizeMntlActivities(
   const activities = new Map<string, NormalizedActivity>();
 
   for (const archive of archives) {
+    if (archive.platform === 'tiktok') continue;
+
     const add = (
       type: NormalizedActivity['type'],
       postId: string,
@@ -109,7 +104,7 @@ export function normalizeMntlActivities(
         postText,
         posts
       );
-      const resolvedPostId = publicPostId(archive.platform, postId, postUrl);
+      const resolvedPostId = postId;
       const activityId = stableActivityId(
         archive.platform,
         archive.ownerId,

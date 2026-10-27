@@ -640,11 +640,10 @@ export class ArchiveStore {
     const posts = mntlArchives.flatMap(archive =>
       archive.posts.map(post => ({ archive, post }))
     );
-    const activities = normalizeMntlActivities(
+    return normalizeMntlActivities(
       mntlArchives.filter(archive => archive.mntlUserId === mntlUserId),
       posts
     );
-    return activities;
   }
 
   private identityMatchesArchive(

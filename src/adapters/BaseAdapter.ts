@@ -1,4 +1,11 @@
-import { NormalizedPost, NormalizedUser, NormalizedFollowRelation, NormalizedLike, NormalizedComment, Platform } from '../types/schemas';
+import {
+  NormalizedPost,
+  NormalizedUser,
+  NormalizedFollowRelation,
+  NormalizedLike,
+  NormalizedComment,
+  Platform,
+} from '../types/schemas';
 
 export interface IPlatformAdapter {
   readonly platform: Platform;

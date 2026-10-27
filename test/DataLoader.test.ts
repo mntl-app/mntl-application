@@ -80,7 +80,7 @@ test('clears stored archives and uploaded ZIPs only for development startup', as
   }
 });
 
-test('extracts posted TikTok videos, account, followers, following, and likes from single-file export', async () => {
+test('extracts TikTok posts, account, followers, and following but not activity', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'tiktok-archive-test-'));
   const archivePath = join(directory, 'archive.zip');
   const zip = new AdmZip();
@@ -92,6 +92,7 @@ test('extracts posted TikTok videos, account, followers, following, and likes fr
           Link: 'https://video-useastred.tiktokv.eu/storage/v1/video-resource?signature=secret',
           Likes: '19',
           Title: 'My posted video',
+          description: 'My posted video',
           Location: 'Example city',
         }],
       },
@@ -131,7 +132,8 @@ test('extracts posted TikTok videos, account, followers, following, and likes fr
       'Watch History': {
         VideoList: [{
           Link: 'https://video-useastred.tiktokv.eu/storage/v1/someone-elses-video',
-          Date: '2026-10-04 00:00:00',
+          Date: '2026-10-04T00:00:00.000Z',
+          Title: 'A watched video',
         }],
       },
     },
@@ -165,20 +167,8 @@ test('extracts posted TikTok videos, account, followers, following, and likes fr
       ]
     );
 
-    const [like] = await adapter.extractLikes(archivePath);
-    assert.equal(like.postId, '7675674338401602849');
-    assert.equal(like.userId, 'creator_handle');
-
-    const [comment] = await adapter.extractComments(archivePath);
-    assert.equal(comment.originalPlatformId, 'comment-1');
-    assert.equal(comment.postId, '7675674338401602849');
-    assert.equal(comment.postOwnerId, 'creator');
-    assert.equal(
-      comment.postUrl,
-      'https://www.tiktok.com/@creator/video/7675674338401602849'
-    );
-    assert.equal(comment.userId, 'me');
-    assert.equal(comment.content, 'A comment from this account');
+    assert.deepEqual(await adapter.extractLikes(archivePath), []);
+    assert.deepEqual(await adapter.extractComments(archivePath), []);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -822,6 +812,45 @@ test('shows matched third-party activity before MNTL verification', async () => 
       mntlHandle: 'mntl_bob',
       platforms: [{ platform: 'instagram', youFollowThem: true, theyFollowYou: false }],
     }]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('does not expose legacy TikTok likes or comments as profile activity', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'tiktok-activity-disabled-test-'));
+  const store = new ArchiveStore(directory);
+  const archive: StoredArchive = {
+    archiveId: 'legacy-tiktok-activity',
+    ownerId: 'alice_tiktok',
+    ownerHandle: 'alice_tiktok',
+    mntlUserId: 'alice-id',
+    mntlHandle: 'mntl_alice',
+    platform: 'tiktok',
+    importedAt: '2026-01-01T00:00:00.000Z',
+    followers: [],
+    following: [],
+    posts: [],
+    likes: [LikeSchema.parse({
+      userId: 'alice_tiktok',
+      postId: 'video-id',
+      platform: 'tiktok',
+      likedAt: new Date('2026-01-01T00:00:30.000Z'),
+    })],
+    comments: [{
+      originalPlatformId: 'legacy-comment',
+      platform: 'tiktok',
+      postId: 'video-id',
+      userId: 'alice_tiktok',
+      content: 'Legacy comment',
+      createdAt: new Date('2026-01-01T00:00:30.000Z'),
+      likesCount: 0,
+    }],
+  };
+
+  try {
+    await store.save(archive);
+    assert.deepEqual(await store.getMntlActivities('alice-id'), []);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

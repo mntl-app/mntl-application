@@ -92,7 +92,10 @@ app.get('/api/users/:userId/activity', async (req: Request, res: Response) => {
     const user = await mntlUserStore.getById(userId);
     if (!user) return res.status(404).json({ error: 'MNTL profile not found' });
     const activities = await archiveStore.getMntlActivities(userId);
-    return res.json({ activities, count: activities.length });
+    return res.json({
+      activities,
+      count: activities.length,
+    });
   } catch (error) {
     console.error('MNTL activity lookup error:', error);
     return res.status(500).json({ error: 'Failed to fetch MNTL activity' });

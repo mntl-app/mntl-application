@@ -1930,11 +1930,15 @@
                 : '<div class="no-data">No MNTL connections found yet.</div>';
             document.getElementById('matchesOnMntlList').innerHTML = discoveredConnections;
             document.getElementById('likesList').innerHTML = renderActivityList(
-                activities.filter(activity => activity.type === 'like'),
+                activities.filter(activity =>
+                    activity.type === 'like' && activity.target.ownerMntlUserId
+                ),
                 'like'
             );
             document.getElementById('commentsList').innerHTML = renderActivityList(
-                activities.filter(activity => activity.type === 'comment'),
+                activities.filter(activity =>
+                    activity.type === 'comment' && activity.target.ownerMntlUserId
+                ),
                 'comment'
             );
         }
@@ -1971,7 +1975,7 @@
                         </article>
                     `;
                 }).join('')
-                : `<div class="no-data">No ${type === 'like' ? 'likes' : 'comments'} found in uploaded archives yet.</div>`;
+                : `<div class="no-data">No matched ${type === 'like' ? 'likes' : 'comments'} yet. Unmatched activity is saved for future archive matching.</div>`;
         }
 
         function renderMntlConnection(connection) {

@@ -284,22 +284,19 @@ For Instagram, the like `postId` is the archive's `fbid` when available; the
 URL-derived shortcode is retained separately as `postShortcode`.
 
 `GET /api/data/comments` returns comments included in the uploaded archive.
-TikTok comments are read from `Comment.Comments.CommentsList` in its single-file
-export. `GET /api/users/:userId/activity` returns likes and comments from all
-archives linked to a MNTL profile in one common format. Each activity has a
-common type, actor, target post ID/type/text/URL, source platform, and timestamp;
-known target posts are enriched with their normalized post type and MNTL owner.
+TikTok imports currently include posts and follower/following lists only; TikTok
+likes, comments, and watch history are not imported. Legacy TikTok likes and
+comments are excluded from profile activity. `GET /api/users/:userId/activity`
+returns likes and comments from supported platform archives linked to a MNTL
+profile in one common format. Each activity has a common type, actor, target
+post ID/type/text/URL, source platform, and timestamp; known target posts are
+enriched with their normalized post type and MNTL owner.
 
-The review page displays all imported likes and comments in separate tabs,
-including activity whose target post has not been uploaded or matched yet.
-Matched activities show the normalized post or reel and then the like or
-comment; unmatched activities are labeled and include an original-post link
-when the archive provides one. The migration tool displays this activity, while
-MNTL decides whether to finalize it. Likes and comments are not selection
-controls or transferred directly to MNTL. TikTok video IDs are extracted from direct
-`/video/<id>` links, including comment `originalPostUrl` values. TikTok's
-own-post media links may omit the public video ID, so those posts cannot be
-matched by ID unless the export provides a direct video link.
+The review page displays matched likes and comments in separate tabs. Unmatched
+activity remains stored with its archive and is reconsidered when another
+archive is uploaded, but is hidden from these lists to reduce clutter. The
+migration tool displays matches, while MNTL decides whether to finalize them.
+Likes and comments are not selection controls or transferred directly to MNTL.
 
 The default loader also stores data in process memory, but each completed account
 archive is saved locally as a JSON file in `data/archives/`. These files persist
@@ -433,7 +430,8 @@ Get list of supported platforms.
 
 ### TikTok
 - Detects TikTok-specific archive paths or `user_data` exports rather than generic `video` filenames
-- Parses TikTok's single-file `user_data_tiktok.json` export for the account profile, the account's own posted videos, followers, following, and liked-video links
+- Parses TikTok's single-file `user_data_tiktok.json` export for the account profile, the account's own posted videos, followers, and following
+- Does not currently import TikTok likes, comments, or watch history
 - Downloads only videos listed under `Post.Posts.VideoList` from HTTPS TikTok CDN hosts, then stores the video files under `data/media/` and serves them through `/api/media`
 - Keeps downloaded video storage bounded (250 MB per video, 500 MB per archive); download errors fail the import with an explicit job error
 - Also supports legacy `video_data.json` and `posts.csv` post exports

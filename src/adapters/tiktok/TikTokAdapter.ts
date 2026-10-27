@@ -1,7 +1,14 @@
 import AdmZip from 'adm-zip';
 import { createHash } from 'crypto';
 import { BaseAdapter } from '../BaseAdapter';
-import { NormalizedPost, NormalizedUser, NormalizedFollowRelation, NormalizedLike, NormalizedComment, Platform } from '../../types/schemas';
+import {
+  NormalizedPost,
+  NormalizedUser,
+  NormalizedFollowRelation,
+  NormalizedLike,
+  NormalizedComment,
+  Platform,
+} from '../../types/schemas';
 
 export class TikTokAdapter extends BaseAdapter {
   readonly platform: Platform = 'tiktok';
@@ -48,17 +55,17 @@ export class TikTokAdapter extends BaseAdapter {
     if (!Array.isArray(videoList)) return [];
 
     return videoList.flatMap((item: any) => {
-      if (typeof item.Link !== 'string' || typeof item.Date !== 'string') return [];
-      const createdAt = new Date(item.Date);
-      if (!Number.isFinite(createdAt.getTime())) return [];
+      const link = this.firstString(item.Link, item.link, item.VideoUrl);
+      const createdAt = this.parseTikTokDate(item.Date ?? item.create_time ?? item.createTime);
+      if (!link || !createdAt) return [];
 
-      const videoId = this.videoIdFromUrl(item.Link);
+      const videoId = this.videoIdFromUrl(link);
       return [{
         originalPlatformId: videoId,
         platform: this.platform,
         postType: 'reel',
-        content: typeof item.Title === 'string' && item.Title ? item.Title : undefined,
-        mediaUrls: [item.Link],
+        content: this.firstString(item.description, item.Description, item.Title, item.title),
+        mediaUrls: [link],
         mediaTypes: ['video'],
         createdAt,
         metrics: {
@@ -290,161 +297,18 @@ export class TikTokAdapter extends BaseAdapter {
     return relations;
   }
 
-  async extractLikes(zipPath: string): Promise<NormalizedLike[]> {
-    const zip = new AdmZip(zipPath);
-    const likes: NormalizedLike[] = [];
-
-    try {
-      const entries = zip.getEntries();
-      const archiveEntry = entries.find(entry =>
-        /(?:^|\/)user_data_tiktok\.json$/i.test(entry.entryName.replace(/\\/g, '/'))
-      );
-      if (archiveEntry) {
-        const data = JSON.parse(archiveEntry.getData().toString('utf8'));
-        const items = data['Likes and Favorites']?.['Like List']?.ItemFavoriteList;
-        for (const item of Array.isArray(items) ? items : []) {
-          if (typeof item.link !== 'string') continue;
-          likes.push({
-            userId: data['Profile And Settings']?.['Profile Info']?.ProfileMap?.userName || 'me',
-            postId: this.videoIdFromUrl(item.link),
-            platform: this.platform,
-            likedAt: this.parseTikTokDate(item.date),
-            postUrl: item.link,
-          });
-        }
-        return likes;
-      }
-
-      const likeFiles = entries.filter(entry =>
-        entry.entryName.includes('like') &&
-        (entry.entryName.endsWith('.json') || entry.entryName.endsWith('.csv'))
-      );
-
-      for (const entry of likeFiles) {
-        const content = entry.getData().toString('utf8');
-
-        if (entry.entryName.endsWith('.json')) {
-          const data = JSON.parse(content);
-          const likeList = data.LikeList || data;
-          const items = Array.isArray(likeList) ? likeList : likeList.ItemList || [];
-
-          for (const item of items) {
-            likes.push({
-              userId: item.UserName || 'unknown',
-              postId: item.VideoID || item.id || 'unknown',
-              platform: this.platform,
-              likedAt: item.LikeDate ? new Date(item.LikeDate) : undefined,
-            });
-          }
-        } else if (entry.entryName.endsWith('.csv')) {
-          const lines = content.split('\n').slice(1);
-          for (const line of lines) {
-            if (!line.trim()) continue;
-            const [username, videoId, likeDate] = line.split(',').map(s => s?.trim());
-            if (username && videoId) {
-              likes.push({
-                userId: username,
-                postId: videoId,
-                platform: this.platform,
-                likedAt: likeDate ? new Date(likeDate) : undefined,
-              });
-            }
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Error extracting TikTok likes:', error);
-    }
-
-    return likes;
+  async extractLikes(_zipPath: string): Promise<NormalizedLike[]> {
+    return [];
   }
 
-  async extractComments(zipPath: string): Promise<NormalizedComment[]> {
-    const zip = new AdmZip(zipPath);
-    const comments: NormalizedComment[] = [];
+  async extractComments(_zipPath: string): Promise<NormalizedComment[]> {
+    return [];
+  }
 
-    try {
-      const entries = zip.getEntries();
-      const archiveEntry = entries.find(entry =>
-        /(?:^|\/)user_data_tiktok\.json$/i.test(entry.entryName.replace(/\\/g, '/'))
-      );
-      if (archiveEntry) {
-        const data = JSON.parse(archiveEntry.getData().toString('utf8'));
-        const commentList = data.Comment?.Comments?.CommentsList;
-        for (const item of Array.isArray(commentList) ? commentList : []) {
-          const content = item.CommentText || item.comment || item.text || item.Content;
-          if (typeof content !== 'string' || !content.trim()) continue;
-          const postUrlValue = item.originalPostUrl || item['original post link'] || item.Link;
-          const postUrl = typeof postUrlValue === 'string' && postUrlValue !== 'N/A'
-            ? postUrlValue
-            : '';
-          const videoId = postUrl.match(/\/video\/(\d+)/i)?.[1];
-          const postOwnerId = postUrl.match(/\/@([^/]+)\/video\//i)?.[1];
-          const createdAt = this.parseTikTokDate(item.Date || item.CreateTime || item.date) || new Date();
-          comments.push({
-            originalPlatformId: String(item.CommentID || item.id || `tt_comment_${comments.length}`),
-            platform: this.platform,
-            postId: String(item.VideoID || item.VideoId || item.videoId || item.postId || videoId || 'unknown'),
-            postOwnerId,
-            postUrl: postUrl || undefined,
-            userId: String(item.UserName || item.Username || item.username || 'me'),
-            content: content.trim(),
-            createdAt,
-            likesCount: this.numberFromValue(item.DiggCount ?? item.Likes),
-          });
-        }
-        return comments;
-      }
-
-      const commentFiles = entries.filter(entry =>
-        entry.entryName.includes('comment') &&
-        (entry.entryName.endsWith('.json') || entry.entryName.endsWith('.csv'))
-      );
-
-      for (const entry of commentFiles) {
-        const content = entry.getData().toString('utf8');
-
-        if (entry.entryName.endsWith('.json')) {
-          const data = JSON.parse(content);
-          const commentList = data.CommentList || data;
-          const items = Array.isArray(commentList) ? commentList : commentList.ItemList || [];
-
-          for (const item of items) {
-            comments.push({
-              originalPlatformId: item.CommentID || item.id || `tt_comment_${Date.now()}_${Math.random()}`,
-              platform: this.platform,
-              postId: item.VideoID || item.VideoId || 'unknown',
-              userId: item.UserName || item.Username || 'unknown',
-              content: item.CommentText || item.text || '',
-              createdAt: item.CreateTime ? new Date(item.CreateTime) : new Date(),
-              likesCount: item.DiggCount || 0,
-            });
-          }
-
-        } else if (entry.entryName.endsWith('.csv')) {
-          const lines = content.split('\n').slice(1);
-          for (const line of lines) {
-            if (!line.trim()) continue;
-            const [videoId, username, commentText, createTime, likes] = line.split(',').map(s => s?.trim());
-            if (username && commentText) {
-              comments.push({
-                originalPlatformId: `tt_comment_${Date.now()}_${Math.random()}`,
-                platform: this.platform,
-                postId: videoId || 'unknown',
-                userId: username,
-                content: commentText,
-                createdAt: createTime ? new Date(createTime) : new Date(),
-                likesCount: parseInt(likes) || 0,
-              });
-            }
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Error extracting TikTok comments:', error);
-    }
-
-    return comments;
+  private firstString(...values: unknown[]): string | undefined {
+    return values.find((value): value is string =>
+      typeof value === 'string' && Boolean(value.trim())
+    )?.trim();
   }
 
   private videoIdFromUrl(value: string): string {
@@ -460,8 +324,12 @@ export class TikTokAdapter extends BaseAdapter {
   }
 
   private parseTikTokDate(value: unknown): Date | undefined {
-    if (typeof value !== 'string' || !value.trim()) return undefined;
-    const date = new Date(value);
+    if (typeof value !== 'string' && typeof value !== 'number') return undefined;
+    if (typeof value === 'string' && !value.trim()) return undefined;
+    const numeric = Number(value);
+    const date = Number.isFinite(numeric) && /^\d{10,13}$/.test(String(value).trim())
+      ? new Date(String(value).trim().length === 10 ? numeric * 1000 : numeric)
+      : new Date(value);
     return Number.isFinite(date.getTime()) ? date : undefined;
   }
 
