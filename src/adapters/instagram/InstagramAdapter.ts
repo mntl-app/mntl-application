@@ -3,6 +3,7 @@ import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { BaseAdapter } from '../BaseAdapter';
+import { ZipExtractor } from '../../etl/extract/ZipExtractor';
 import { NormalizedPost, NormalizedUser, NormalizedFollowRelation, NormalizedLike, NormalizedComment, Platform } from '../../types/schemas';
 
 export class InstagramAdapter extends BaseAdapter {
@@ -37,7 +38,7 @@ export class InstagramAdapter extends BaseAdapter {
   }
 
   async extractPosts(zipPath: string): Promise<NormalizedPost[]> {
-    const zip = new AdmZip(zipPath);
+    const zip = ZipExtractor.open(zipPath);
     const posts: NormalizedPost[] = [];
 
     try {
@@ -270,7 +271,7 @@ export class InstagramAdapter extends BaseAdapter {
   }
 
   async extractUsers(zipPath: string): Promise<NormalizedUser[]> {
-    const zip = new AdmZip(zipPath);
+    const zip = ZipExtractor.open(zipPath);
     const users: NormalizedUser[] = [];
 
     try {
@@ -317,7 +318,7 @@ export class InstagramAdapter extends BaseAdapter {
   }
 
   async extractFollowRelations(zipPath: string): Promise<NormalizedFollowRelation[]> {
-    const zip = new AdmZip(zipPath);
+    const zip = ZipExtractor.open(zipPath);
     const relations: NormalizedFollowRelation[] = [];
 
     try {
@@ -382,7 +383,7 @@ export class InstagramAdapter extends BaseAdapter {
   }
 
   async extractLikes(zipPath: string): Promise<NormalizedLike[]> {
-    const zip = new AdmZip(zipPath);
+    const zip = ZipExtractor.open(zipPath);
     const likes: NormalizedLike[] = [];
 
     try {
@@ -439,7 +440,7 @@ export class InstagramAdapter extends BaseAdapter {
   }
 
   async extractComments(zipPath: string): Promise<NormalizedComment[]> {
-    const zip = new AdmZip(zipPath);
+    const zip = ZipExtractor.open(zipPath);
     const comments: NormalizedComment[] = [];
 
     try {

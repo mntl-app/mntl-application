@@ -1,6 +1,6 @@
-import AdmZip from 'adm-zip';
 import { createHash } from 'crypto';
 import { BaseAdapter } from '../BaseAdapter';
+import { ZipExtractor } from '../../etl/extract/ZipExtractor';
 import {
   NormalizedPost,
   NormalizedUser,
@@ -23,7 +23,7 @@ export class TikTokAdapter extends BaseAdapter {
   }
 
   async extractPosts(zipPath: string): Promise<NormalizedPost[]> {
-    const zip = new AdmZip(zipPath);
+    const zip = ZipExtractor.open(zipPath);
 
     try {
       const entries = zip.getEntries();
@@ -156,7 +156,7 @@ export class TikTokAdapter extends BaseAdapter {
   }
 
   async extractUsers(zipPath: string): Promise<NormalizedUser[]> {
-    const zip = new AdmZip(zipPath);
+    const zip = ZipExtractor.open(zipPath);
     const users: NormalizedUser[] = [];
 
     try {
@@ -215,7 +215,7 @@ export class TikTokAdapter extends BaseAdapter {
   }
 
   async extractFollowRelations(zipPath: string): Promise<NormalizedFollowRelation[]> {
-    const zip = new AdmZip(zipPath);
+    const zip = ZipExtractor.open(zipPath);
     const relations: NormalizedFollowRelation[] = [];
 
     try {

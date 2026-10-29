@@ -988,6 +988,7 @@
                     <h2>Choose posts to migrate</h2>
                     <p class="subtitle">Review each post and its caption. All posts are included by default.</p>
                 </div>
+                <div class="migration-notice" id="importWarnings" hidden></div>
                 <div class="selection-toolbar">
                     <button class="selection-action" data-select-kind="posts" data-select-all="true">Select all</button>
                     <button class="selection-action" data-select-kind="posts" data-select-all="false">Clear all</button>
@@ -1025,6 +1026,24 @@
                 </div>
             </section>
 
+            <section class="wizard-page" id="friendsStep" hidden>
+                <div class="wizard-heading">
+                    <div class="wizard-progress">Step 2 of 3</div>
+                    <h2>Choose your friends</h2>
+                    <p class="subtitle">Search and select your Facebook friends. Friendships are mutual, unlike following. All are included by default.</p>
+                </div>
+                <div class="selection-toolbar">
+                    <input type="search" id="friendsSearch" placeholder="Search friends" aria-label="Search friends">
+                    <button class="selection-action" data-select-kind="friends" data-select-all="true">Select all</button>
+                    <button class="selection-action" data-select-kind="friends" data-select-all="false">Clear all</button>
+                </div>
+                <div class="data-list" id="friendsList"></div>
+                <div class="wizard-navigation">
+                    <button class="btn btn-secondary" data-wizard-back="posts">Back: posts</button>
+                    <button class="btn" data-wizard-next="following">Next: following</button>
+                </div>
+            </section>
+
             <section class="wizard-page" id="followingStep" hidden>
                 <div class="wizard-heading">
                     <div class="wizard-progress">Step 3 of 3</div>
@@ -1055,6 +1074,7 @@
                     <button class="summary-tab active" data-summary-tab="selectedPosts">Selected posts</button>
                     <button class="summary-tab" data-summary-tab="selectedReplies">Selected replies</button>
                     <button class="summary-tab" data-summary-tab="selectedFollowers">Selected followers</button>
+                    <button class="summary-tab" data-summary-tab="selectedFriends" hidden>Selected friends</button>
                     <button class="summary-tab" data-summary-tab="selectedFollowing">Selected following</button>
                     <button class="summary-tab" data-summary-tab="matchesOnMntl">Matches on MNTL</button>
                     <button class="summary-tab" data-summary-tab="likes">Likes</button>
@@ -1071,6 +1091,10 @@
                 <section class="summary-panel" id="selectedFollowers" hidden>
                     <h3>Followers selected for migration</h3>
                     <div class="data-list" id="selectedFollowersList"></div>
+                </section>
+                <section class="summary-panel" id="selectedFriends" hidden>
+                    <h3>Friends selected for migration</h3>
+                    <div class="data-list" id="selectedFriendsList"></div>
                 </section>
                 <section class="summary-panel" id="selectedFollowing" hidden>
                     <h3>Accounts selected to follow</h3>
@@ -1130,6 +1154,13 @@
         const jobIdValue = document.getElementById('jobIdValue');
         const postsValue = document.getElementById('postsValue');
 
+        // Each tab acts for its own MNTL profile, even when several are open at once.
+        function apiFetch(url, options = {}) {
+            const headers = new Headers(options.headers);
+            if (currentProfile) headers.set('X-MNTL-User', currentProfile.userId);
+            return fetch(url, { ...options, headers });
+        }
+
         let selectedFile = null;
         let currentJobId = null;
         let currentArchiveId = null;
@@ -1138,7 +1169,7 @@
         let currentProfile = null;
         let progressInterval = null;
         let currentSelection = null;
-        let selectionCatalog = { posts: [], replies: [], followers: [], following: [] };
+        let selectionCatalog = { posts: [], replies: [], followers: [], following: [], friends: [] };
         let selectionSavePromise = Promise.resolve();
         const uploadedPlatformStorageKey = 'mntl-migration-uploaded-platforms';
         let uploadedPlatforms = new Set();
@@ -1155,7 +1186,7 @@
             button.textContent = 'Saving handle...';
             hideError();
             try {
-                const response = await fetch('/api/users', {
+                const response = await apiFetch('/api/users', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ handle }),
@@ -1285,7 +1316,7 @@
             formData.append('serverInstanceId', serverInstanceId || '');
 
             try {
-                const response = await fetch('/api/upload', {
+                const response = await apiFetch('/api/upload', {
                     method: 'POST',
                     body: formData
                 });
@@ -1303,7 +1334,7 @@
                 sessionStorage.setItem(getUploadedPlatformStorageKey(), JSON.stringify([...uploadedPlatforms]));
                 renderAvailablePlatforms();
                 currentSelection = null;
-                selectionCatalog = { posts: [], replies: [], followers: [], following: [] };
+                selectionCatalog = { posts: [], replies: [], followers: [], following: [], friends: [] };
                 Object.keys(loadedTabData).forEach(tab => delete loadedTabData[tab]);
                 selectionSavePromise = Promise.resolve();
                 platformValue.textContent = data.platform;
@@ -1328,7 +1359,7 @@
 
             progressInterval = setInterval(async () => {
                 try {
-                    const response = await fetch(`/api/jobs/${currentJobId}`);
+                    const response = await apiFetch(`/api/jobs/${currentJobId}`);
                     const data = await response.json();
 
                     if (!response.ok) {
@@ -1348,6 +1379,9 @@
                             sessionStorage.setItem(getUploadedPlatformStorageKey(), JSON.stringify([...uploadedPlatforms]));
                             renderAvailablePlatforms();
                             showSuccess('Archive processed. Review and confirm your selections to complete migration.');
+                            const importWarnings = document.getElementById('importWarnings');
+                            importWarnings.textContent = (data.warnings || []).join(' ');
+                            importWarnings.hidden = !data.warnings?.length;
                             progressSection.classList.remove('show');
                             document.getElementById('uploadCard').hidden = true;
                             uploadArea.hidden = true;
@@ -1355,7 +1389,7 @@
                             uploadBtn.hidden = true;
                             document.getElementById('resultsSection').classList.add('show');
                             currentSelection = null;
-                            selectionCatalog = { posts: [], replies: [], followers: [], following: [] };
+                            selectionCatalog = { posts: [], replies: [], followers: [], following: [], friends: [] };
                             Object.keys(loadedTabData).forEach(tab => delete loadedTabData[tab]);
                             selectionSavePromise = Promise.resolve();
                             goToWizardStep('postsStep').catch(error => showError(error.message));
@@ -1404,7 +1438,7 @@
 
         async function updateAvailablePlatforms() {
             try {
-                const response = await fetch('/api/session');
+                const response = await apiFetch('/api/session');
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.error || 'Failed to load platforms');
                 supportedPlatforms = data.platforms;
@@ -1457,9 +1491,19 @@
             postsStep: 'posts',
             followersStep: 'followers',
             followingStep: 'following',
+            friendsStep: 'friends',
         };
 
         async function goToWizardStep(stepId) {
+            // Facebook exports have friends instead of followers.
+            const isFacebook = currentPlatform === 'facebook';
+            if (stepId === 'followersStep' && isFacebook) stepId = 'friendsStep';
+            document.querySelectorAll('[data-wizard-next="followers"]').forEach(button => {
+                button.textContent = isFacebook ? 'Next: friends' : 'Next: followers';
+            });
+            document.querySelectorAll('[data-wizard-back="followers"]').forEach(button => {
+                button.textContent = isFacebook ? 'Back: friends' : 'Back: followers';
+            });
             document.querySelectorAll('.wizard-page').forEach(page => {
                 page.hidden = page.id !== stepId;
             });
@@ -1502,15 +1546,15 @@
             button.textContent = 'Saving selections and preparing summary...';
             try {
                 await queueSelectionSave();
-                const summaryResponse = await fetch(`/api/data/summary?archiveId=${encodeURIComponent(currentArchiveId)}`);
+                const summaryResponse = await apiFetch(`/api/data/summary?archiveId=${encodeURIComponent(currentArchiveId)}`);
                 const archiveSummary = await summaryResponse.json();
                 if (!summaryResponse.ok) {
                     throw new Error(archiveSummary.error || 'Failed to load archive summary');
                 }
                 currentArchiveSummary = archiveSummary;
                 const [connectionsResponse, activityResponse] = await Promise.all([
-                    fetch(`/api/connections?userId=${encodeURIComponent(currentProfile.userId)}`),
-                    fetch(`/api/users/${encodeURIComponent(currentProfile.userId)}/activity`),
+                    apiFetch(`/api/connections?userId=${encodeURIComponent(currentProfile.userId)}`),
+                    apiFetch(`/api/users/${encodeURIComponent(currentProfile.userId)}/activity`),
                 ]);
                 const [connectionsData, activityData] = await Promise.all([
                     connectionsResponse.json(),
@@ -1544,7 +1588,11 @@
             button.textContent = 'Saving your confirmed selection...';
             try {
                 await queueSelectionSave();
-                const response = await fetch(`/api/data/summary?archiveId=${encodeURIComponent(currentArchiveId)}`);
+                const confirmResponse = await apiFetch(`/api/archives/${encodeURIComponent(currentArchiveId)}/confirm`, { method: 'POST' });
+                if (!confirmResponse.ok) {
+                    throw new Error((await confirmResponse.json()).error || 'Failed to confirm migration');
+                }
+                const response = await apiFetch(`/api/data/summary?archiveId=${encodeURIComponent(currentArchiveId)}`);
                 const archiveSummary = await response.json();
                 if (!response.ok) throw new Error(archiveSummary.error || 'Failed to confirm migration');
 
@@ -1585,7 +1633,7 @@
             const archiveScope = currentArchiveId
                 ? `?archiveId=${encodeURIComponent(currentArchiveId)}`
                 : '';
-            const response = await fetch(`/api/data/${tab}${archiveScope}`);
+            const response = await apiFetch(`/api/data/${tab}${archiveScope}`);
             const data = await response.json();
 
             if (!response.ok) {
@@ -1597,6 +1645,7 @@
                     postIds: [...data.selection.postIds],
                     followers: [...data.selection.followers],
                     following: [...data.selection.following],
+                    ...(data.selection.friends ? { friends: [...data.selection.friends] } : {}),
                 };
             }
             renderTabData(tab, data);
@@ -1612,7 +1661,7 @@
             } else if (tab === 'replies') {
                 selectionCatalog.replies = data.replies.map(post => post.originalPlatformId);
                 document.getElementById('repliesSection').hidden = data.count === 0;
-            } else if (tab === 'followers' || tab === 'following') {
+            } else if (tab === 'followers' || tab === 'following' || tab === 'friends') {
                 const key = tab === 'followers' ? 'followerId' : 'followingId';
                 selectionCatalog[tab] = data.selectionCatalog?.[tab] ||
                     data.followRelations.map(relation => relation[key]);
@@ -1625,7 +1674,7 @@
                 return;
             }
 
-            const items = tab === 'followers' || tab === 'following' ? data.followRelations :
+            const items = tab === 'followers' || tab === 'following' || tab === 'friends' ? data.followRelations :
                           tab === 'posts' ? data.posts :
                           tab === 'replies' ? data.replies :
                           data.likes;
@@ -1667,6 +1716,17 @@
                             </div>
                             <div class="data-item-content">
                                 <strong>${item.platform === 'x' ? `@${escapeHtml(item.accountHandle)}` : escapeHtml(item.followerId)}</strong> follows you
+                            </div>
+                        </div>
+                    `);
+                case 'friends':
+                    return renderSelectionRow('friends', item.followingId, item.followingId, `
+                        <div class="data-item">
+                            <div class="data-item-header">
+                                <span class="data-item-platform">${escapeHtml(item.platform)}</span>
+                            </div>
+                            <div class="data-item-content">
+                                You are friends with <strong>${escapeHtml(item.followingId)}</strong>
                             </div>
                         </div>
                     `);
@@ -1730,9 +1790,10 @@
                 postIds: [...currentSelection.postIds],
                 followers: [...currentSelection.followers],
                 following: [...currentSelection.following],
+                ...(currentSelection.friends ? { friends: [...currentSelection.friends] } : {}),
             };
             selectionSavePromise = selectionSavePromise.catch(() => {}).then(async () => {
-                const response = await fetch(`/api/archives/${encodeURIComponent(currentArchiveId)}/selection`, {
+                const response = await apiFetch(`/api/archives/${encodeURIComponent(currentArchiveId)}/selection`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(selection),
@@ -1779,7 +1840,7 @@
             });
         });
 
-        ['followers', 'following'].forEach(tab => {
+        ['followers', 'following', 'friends'].forEach(tab => {
             document.getElementById(`${tab}Search`).addEventListener('input', () => filterSelectionRows(tab));
         });
 
@@ -1855,13 +1916,22 @@
             const hiddenSelectedFollowing = archiveSummary.platform === 'x'
                 ? currentSelection.following.length - selectedFollowing.length
                 : 0;
+            const isFacebook = archiveSummary.platform === 'facebook';
+            const selectedFriends = currentSelection.friends || [];
+            document.querySelector('[data-summary-tab="selectedFollowers"]').hidden = isFacebook;
+            document.querySelector('[data-summary-tab="selectedFriends"]').hidden = !isFacebook;
+            document.getElementById('selectedFriendsList').innerHTML = selectedFriends.length
+                ? selectedFriends.map(name => `
+                    <div class="data-item"><div class="data-item-content">You are friends with <strong>${escapeHtml(name)}</strong></div></div>
+                `).join('')
+                : '<div class="no-data">No friends selected.</div>';
 
             document.getElementById('selectionCounts').innerHTML = [
                 ['Selected posts', selectedPosts.length],
                 ['Including reels', selectedReels],
                 ['Text-only posts', selectedTextPosts],
                 ['Selected replies', selectedReplies.length],
-                ['Selected followers', selectedFollowers.length],
+                isFacebook ? ['Selected friends', selectedFriends.length] : ['Selected followers', selectedFollowers.length],
                 ['Selected following', selectedFollowing.length],
                 ['Matches on MNTL', mntlConnections.length],
                 ['Likes', activities.filter(activity => activity.type === 'like').length],
@@ -1957,12 +2027,12 @@
                             </div>
                             <div class="data-item-content">
                                 ${matchedPost
-                                    ? `<strong>@${escapeHtml(activity.target.ownerHandle || 'unknown')}'s ${escapeHtml(activity.target.type)}</strong>`
+                                    ? `<strong>@${escapeHtml(activity.target.ownerHandle || 'unknown')}'s ${escapeHtml(activity.target.type === 'unknown' ? 'post' : activity.target.type)}</strong>`
                                     : `<strong>${escapeHtml(activity.platform)} post not matched yet</strong>`}
                                 ${activity.target.text
                                     ? `<div class="data-item-content">${escapeHtml(activity.target.text)}</div>`
                                     : matchedPost ? '<div class="data-item-content">(No text)</div>' : ''}
-                                ${matchedPost ? renderPostMedia({
+                                ${matchedPost && activity.target.mediaUrls?.length ? renderPostMedia({
                                     mediaUrls: activity.target.mediaUrls,
                                     mediaTypes: activity.target.mediaTypes,
                                 }) : renderExternalPostLink(activity.target.url)}
@@ -1988,7 +2058,13 @@
             const mutual = connection.platforms
                 .filter(match => match.youFollowThem && match.theyFollowYou)
                 .map(match => match.platform);
+            const friends = connection.platforms
+                .filter(match => match.friends)
+                .map(match => match.platform);
             const sentences = [];
+            if (friends.length) {
+                sentences.push(`You and @${escapeHtml(connection.mntlHandle)} are friends on ${friends.map(escapeHtml).join(', ')}.`);
+            }
             if (onlyYouFollow.length) {
                 sentences.push(`You follow @${escapeHtml(connection.mntlHandle)} on ${onlyYouFollow.map(escapeHtml).join(', ')}.`);
             }

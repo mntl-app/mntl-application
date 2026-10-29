@@ -1,9 +1,9 @@
-import AdmZip from 'adm-zip';
 import { IPlatformAdapter } from './BaseAdapter';
 import { InstagramAdapter } from './instagram/InstagramAdapter';
 import { FacebookAdapter } from './facebook/FacebookAdapter';
 import { XAdapter } from './x/XAdapter';
 import { TikTokAdapter } from './tiktok/TikTokAdapter';
+import { ZipExtractor } from '../etl/extract/ZipExtractor';
 
 export class AdapterFactory {
   private static adapters: IPlatformAdapter[] = [
@@ -15,7 +15,7 @@ export class AdapterFactory {
 
   static getAdapter(zipPath: string): IPlatformAdapter | null {
     try {
-      const zip = new AdmZip(zipPath);
+      const zip = ZipExtractor.open(zipPath);
       const entries = zip.getEntries().map(entry => entry.entryName);
 
       for (const adapter of this.adapters) {

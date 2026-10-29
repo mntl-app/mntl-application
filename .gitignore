@@ -3,6 +3,10 @@ dist/
 .env
 uploads/
 data/archives/
+data/media/
+data/mntl-users.json
 temp/
 *.log
 .DS_Store
+data/fingerprint.key
+data/opt-outs.json

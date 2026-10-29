@@ -5,15 +5,12 @@ import {
   NormalizedFollowRelation,
   NormalizedComment,
 } from '../../types/schemas';
+import { likeTextKey, textKey } from './Identity';
 
 export interface LikePostMatch {
   like: NormalizedLike;
   matchedPost: NormalizedPost | null;
   matchType: 'id' | 'text' | null;
-}
-
-function normalizeMatchText(text: string): string {
-  return text.normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
 function postKey(platform: string, postId: string): string {
@@ -47,9 +44,9 @@ export abstract class BaseDataLoader implements IDataLoader {
 export class InMemoryDataLoader extends BaseDataLoader {
   private posts: Map<string, NormalizedPost> = new Map();
   private users: Map<string, NormalizedUser> = new Map();
-  private followRelations: NormalizedFollowRelation[] = [];
-  private likes: NormalizedLike[] = [];
-  private comments: NormalizedComment[] = [];
+  private followRelations: Map<string, NormalizedFollowRelation> = new Map();
+  private likes: Map<string, NormalizedLike> = new Map();
+  private comments: Map<string, NormalizedComment> = new Map();
 
   async connect(): Promise<void> {
     console.log('In-memory data loader connected');
@@ -59,73 +56,40 @@ export class InMemoryDataLoader extends BaseDataLoader {
     console.log('In-memory data loader disconnected');
   }
 
-  async savePosts(posts: NormalizedPost[]): Promise<number> {
+  private saveUnique<T>(store: Map<string, T>, items: T[], keyOf: (item: T) => string): number {
     let saved = 0;
-    for (const post of posts) {
-      const key = `${post.platform}_${post.originalPlatformId}`;
-      if (!this.posts.has(key)) {
-        this.posts.set(key, post);
+    for (const item of items) {
+      const key = keyOf(item);
+      if (!store.has(key)) {
+        store.set(key, item);
         saved++;
       }
     }
     return saved;
+  }
+
+  async savePosts(posts: NormalizedPost[]): Promise<number> {
+    return this.saveUnique(this.posts, posts, post => `${post.platform}_${post.originalPlatformId}`);
   }
 
   async saveUsers(users: NormalizedUser[]): Promise<number> {
-    let saved = 0;
-    for (const user of users) {
-      const key = `${user.platform}_${user.originalPlatformId}`;
-      if (!this.users.has(key)) {
-        this.users.set(key, user);
-        saved++;
-      }
-    }
-    return saved;
+    return this.saveUnique(this.users, users, user => `${user.platform}_${user.originalPlatformId}`);
   }
 
   async saveFollowRelations(relations: NormalizedFollowRelation[]): Promise<number> {
-    let saved = 0;
-    for (const relation of relations) {
-      const key = `${relation.platform}_${relation.followerId}_${relation.followingId}`;
-      const exists = this.followRelations.some(
-        r => `${r.platform}_${r.followerId}_${r.followingId}` === key
-      );
-      if (!exists) {
-        this.followRelations.push(relation);
-        saved++;
-      }
-    }
-    return saved;
+    return this.saveUnique(
+      this.followRelations,
+      relations,
+      relation => `${relation.platform}_${relation.followerId}_${relation.followingId}`
+    );
   }
 
   async saveLikes(likes: NormalizedLike[]): Promise<number> {
-    let saved = 0;
-    for (const like of likes) {
-      const key = `${like.platform}_${like.userId}_${like.postId}`;
-      const exists = this.likes.some(
-        l => `${l.platform}_${l.userId}_${l.postId}` === key
-      );
-      if (!exists) {
-        this.likes.push(like);
-        saved++;
-      }
-    }
-    return saved;
+    return this.saveUnique(this.likes, likes, like => `${like.platform}_${like.userId}_${like.postId}`);
   }
 
   async saveComments(comments: NormalizedComment[]): Promise<number> {
-    let saved = 0;
-    for (const comment of comments) {
-      const key = `${comment.platform}_${comment.originalPlatformId}`;
-      const exists = this.comments.some(
-        c => `${c.platform}_${c.originalPlatformId}` === key
-      );
-      if (!exists) {
-        this.comments.push(comment);
-        saved++;
-      }
-    }
-    return saved;
+    return this.saveUnique(this.comments, comments, comment => `${comment.platform}_${comment.originalPlatformId}`);
   }
 
   async clearPosts(): Promise<void> {
@@ -145,11 +109,11 @@ export class InMemoryDataLoader extends BaseDataLoader {
   }
 
   getFollowRelations(): NormalizedFollowRelation[] {
-    return [...this.followRelations];
+    return [...this.followRelations.values()];
   }
 
   getLikes(): NormalizedLike[] {
-    return [...this.likes];
+    return [...this.likes.values()];
   }
 
   getLikeMatches(): LikePostMatch[] {
@@ -158,25 +122,19 @@ export class InMemoryDataLoader extends BaseDataLoader {
 
     for (const post of this.posts.values()) {
       postsById.set(postKey(post.platform, post.originalPlatformId), post);
-      if (!post.content) continue;
-
-      const textKey = normalizeMatchText(post.content);
-      if (!textKey) continue;
-      const matchingPosts = postsByText.get(`${post.platform}\u0000${textKey}`) || [];
-      matchingPosts.push(post);
-      postsByText.set(`${post.platform}\u0000${textKey}`, matchingPosts);
+      const contentKey = textKey(post.platform, post.content);
+      if (!contentKey) continue;
+      postsByText.set(contentKey, [...(postsByText.get(contentKey) || []), post]);
     }
 
-    return this.likes.map(like => {
+    return [...this.likes.values()].map(like => {
       const idMatch = postsById.get(postKey(like.platform, like.postId));
       if (idMatch) {
         return { like, matchedPost: idMatch, matchType: 'id' };
       }
 
-      const textKey = like.postText ? normalizeMatchText(like.postText) : '';
-      const matchingPosts = textKey
-        ? postsByText.get(`${like.platform}\u0000${textKey}`) || []
-        : [];
+      const likedTextKey = likeTextKey(like);
+      const matchingPosts = likedTextKey ? postsByText.get(likedTextKey) || [] : [];
       if (matchingPosts.length === 1) {
         return { like, matchedPost: matchingPosts[0], matchType: 'text' };
       }
@@ -186,6 +144,6 @@ export class InMemoryDataLoader extends BaseDataLoader {
   }
 
   getComments(): NormalizedComment[] {
-    return [...this.comments];
+    return [...this.comments.values()];
   }
 }

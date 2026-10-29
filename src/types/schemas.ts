@@ -52,6 +52,8 @@ export const FollowRelationSchema = z.object({
   followerId: z.string(),
   followingId: z.string(),
   platform: PlatformEnum,
+  // Facebook friendships are mutual and distinct from following someone.
+  relationship: z.enum(['follow', 'friend']).optional(),
   followedAt: z.date().optional(),
 });
 
@@ -65,6 +67,11 @@ export const LikeSchema = z.object({
   postUrl: z.string().optional(),
   postText: z.string().optional(),
   postShortcode: z.string().optional(),
+  postOwnerId: z.string().optional(),
+  postOwnerName: z.string().optional(),
+  postTextKey: z.string().optional(),
+  postOwnerIdKey: z.string().optional(),
+  postOwnerNameKey: z.string().optional(),
 });
 
 export type NormalizedLike = z.infer<typeof LikeSchema>;
@@ -74,6 +81,9 @@ export const CommentSchema = z.object({
   platform: PlatformEnum,
   postId: z.string(),
   postOwnerId: z.string().optional(),
+  postOwnerName: z.string().optional(),
+  postOwnerIdKey: z.string().optional(),
+  postOwnerNameKey: z.string().optional(),
   postUrl: z.string().optional(),
   userId: z.string(),
   content: z.string(),
@@ -115,6 +125,7 @@ export const MigrationJobSchema = z.object({
   startedAt: z.date().optional(),
   completedAt: z.date().optional(),
   error: z.string().optional(),
+  warnings: z.array(z.string()).optional(),
   totalPosts: z.number().default(0),
   processedPosts: z.number().default(0),
 });

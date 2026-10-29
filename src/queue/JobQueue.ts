@@ -1,20 +1,12 @@
 import { Queue, Worker, Job } from 'bullmq';
 import Redis from 'ioredis';
-import { AdapterFactory } from '../adapters/AdapterFactory';
-import { TikTokMediaDownloader } from '../adapters/tiktok/TikTokMediaDownloader';
-import { DataNormalizer } from '../etl/transform/DataNormalizer';
 import { InMemoryDataLoader } from '../etl/load/DataLoader';
 import { ArchiveStore } from '../etl/load/ArchiveStore';
-import { MigrationJob, Platform } from '../types/schemas';
-import * as path from 'path';
+import { MigrationJob } from '../types/schemas';
+import { ZipExtractor } from '../etl/extract/ZipExtractor';
+import { MigrationJobData, MigrationProgress, MigrationResult, runMigrationPipeline } from './MigrationPipeline';
 
-export interface MigrationJobData {
-  zipPath: string;
-  userId: string;
-  mntlUserId: string;
-  mntlHandle: string;
-  platform?: Platform;
-}
+export type { MigrationJobData } from './MigrationPipeline';
 
 export class JobQueue {
   private static instance: JobQueue;
@@ -43,12 +35,17 @@ export class JobQueue {
       }
     );
 
-    this.worker.on('completed', (job: Job) => {
+    // The raw export holds far more than is imported, so it is never kept.
+    this.worker.on('completed', async (job: Job<MigrationJobData>) => {
       console.log(`Job ${job.id} completed`);
+      await ZipExtractor.delete(job.data.zipPath);
     });
 
-    this.worker.on('failed', (job: Job | undefined, error: Error) => {
+    this.worker.on('failed', async (job: Job<MigrationJobData> | undefined, error: Error) => {
       console.error(`Job ${job?.id} failed:`, error);
+      if (job && job.attemptsMade >= (job.opts.attempts ?? 1)) {
+        await ZipExtractor.delete(job.data.zipPath);
+      }
     });
   }
 
@@ -70,6 +67,11 @@ export class JobQueue {
     return job.id!;
   }
 
+  async getJobOwnerId(jobId: string): Promise<string | null> {
+    const job = await this.queue.getJob(jobId);
+    return job?.data.mntlUserId ?? null;
+  }
+
   async getJobStatus(jobId: string): Promise<MigrationJob | null> {
     const job = await this.queue.getJob(jobId);
     if (!job) {
@@ -77,139 +79,28 @@ export class JobQueue {
     }
 
     const state = await job.getState();
-    const progress = job.progress;
-    const progressObj = typeof progress === 'object' ? progress : {};
+    const progress = (typeof job.progress === 'object' ? job.progress : {}) as Partial<MigrationProgress>;
 
     return {
       jobId: job.id!,
       platform: job.data.platform || 'instagram',
       status: state === 'completed' ? 'completed' : state === 'failed' ? 'failed' : state === 'active' ? 'processing' : 'pending',
-      progress: typeof progress === 'number' ? progress : 0,
+      progress: progress.progress || 0,
       startedAt: job.timestamp ? new Date(job.timestamp) : undefined,
       completedAt: job.finishedOn ? new Date(job.finishedOn) : undefined,
       error: job.failedReason,
-      totalPosts: (progressObj as any)?.totalPosts || 0,
-      processedPosts: (progressObj as any)?.processedPosts || 0,
+      warnings: job.returnvalue?.warnings?.length ? job.returnvalue.warnings : undefined,
+      totalPosts: progress.totalPosts || 0,
+      processedPosts: 0,
     };
   }
 
-  private async processMigrationJob(job: Job<MigrationJobData>): Promise<void> {
-    const { zipPath, userId } = job.data;
-
-    try {
-      await job.updateProgress(10);
-
-      const adapter = AdapterFactory.getAdapter(zipPath);
-      if (!adapter) {
-        throw new Error('Unable to detect platform from archive');
-      }
-
-      await job.updateProgress(20);
-
-      const isValid = await adapter.validateArchive(zipPath);
-      if (!isValid) {
-        throw new Error('Invalid archive file');
-      }
-
-      await job.updateProgress(30);
-
-      const archiveId = path.basename(zipPath);
-      const extractedPosts = await adapter.extractPosts(zipPath);
-      const localPosts = adapter.platform === 'tiktok'
-        ? await new TikTokMediaDownloader().downloadOwnPostedVideos(extractedPosts, archiveId)
-        : extractedPosts;
-      const posts = localPosts.map(post => ({
-        ...post,
-        mediaUrls: post.mediaUrls?.map(
-          entry => entry.startsWith('/api/media?')
-            ? entry
-            : `/api/media?archiveId=${encodeURIComponent(archiveId)}&entry=${encodeURIComponent(entry)}`
-        ),
-      }));
-      const currentProgress = typeof job.progress === 'object' ? job.progress : {};
-      await job.updateProgress({ ...currentProgress, totalPosts: posts.length, processedPosts: 0 });
-
-      const users = await adapter.extractUsers(zipPath);
-      const archiveOwner = users.find(user => user.username !== 'unknown');
-      const archiveOwnerId = adapter.platform === 'x'
-        ? archiveOwner?.originalPlatformId || userId
-        : archiveOwner?.username || userId;
-      await job.updateProgress(40);
-
-      const followRelations = await adapter.extractFollowRelations(zipPath);
-      await job.updateProgress(50);
-
-      const likes = await adapter.extractLikes(zipPath);
-      await job.updateProgress(60);
-
-      const comments = await adapter.extractComments(zipPath);
-      await job.updateProgress(70);
-
-      const normalizedData = DataNormalizer.normalizeAll({
-        posts,
-        users,
-        followRelations,
-        likes,
-        comments,
-      });
-      normalizedData.followRelations = normalizedData.followRelations.map(relation => ({
-        ...relation,
-        followerId: relation.followerId === 'me' ? archiveOwnerId : relation.followerId,
-        followingId: relation.followingId === 'me' ? archiveOwnerId : relation.followingId,
-      }));
-      normalizedData.likes = normalizedData.likes.map(like => ({
-        ...like,
-        userId: like.userId === 'me' ? archiveOwnerId : like.userId,
-      }));
-      await job.updateProgress(80);
-
-      await this.dataLoader.connect();
-      await this.dataLoader.savePosts(normalizedData.posts);
-      await this.dataLoader.saveUsers(normalizedData.users);
-      await this.dataLoader.saveFollowRelations(normalizedData.followRelations);
-      await this.dataLoader.saveLikes(normalizedData.likes);
-      await this.dataLoader.saveComments(normalizedData.comments);
-      await this.dataLoader.disconnect();
-
-      await this.archiveStore.save({
-        archiveId,
-        ownerId: archiveOwnerId,
-        ownerHandle: archiveOwner?.username,
-        mntlUserId: job.data.mntlUserId,
-        mntlHandle: job.data.mntlHandle,
-        platform: adapter.platform,
-        importedAt: new Date().toISOString(),
-        followers: [...new Set(normalizedData.followRelations
-          .filter(relation => relation.followingId === archiveOwnerId)
-          .map(relation => relation.followerId))],
-        following: [...new Set(normalizedData.followRelations
-          .filter(relation => relation.followerId === archiveOwnerId)
-          .map(relation => relation.followingId))],
-        posts: normalizedData.posts,
-        likes: normalizedData.likes,
-        comments: normalizedData.comments,
-      });
-
-      const importedPostKeys = new Set(
-        normalizedData.posts.map(post => `${post.platform}\u0000${post.originalPlatformId}`)
-      );
-      for (const match of this.dataLoader.getLikeMatches()) {
-        if (
-          match.matchedPost &&
-          importedPostKeys.has(`${match.matchedPost.platform}\u0000${match.matchedPost.originalPlatformId}`)
-        ) {
-          console.info(
-            `Crossmatched ${match.like.platform} target ${match.like.postId} to uploaded post ${match.matchedPost.originalPlatformId} by ${match.matchType}`
-          );
-        }
-      }
-
-      await job.updateProgress(100);
-
-    } catch (error) {
-      console.error('Migration job failed:', error);
-      throw error;
-    }
+  private async processMigrationJob(job: Job<MigrationJobData>): Promise<MigrationResult> {
+    let totalPosts = 0;
+    return runMigrationPipeline(job.data, this.dataLoader, this.archiveStore, async update => {
+      totalPosts = update.totalPosts ?? totalPosts;
+      await job.updateProgress({ progress: update.progress, totalPosts });
+    });
   }
 
   async close(): Promise<void> {

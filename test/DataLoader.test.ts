@@ -11,16 +11,22 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { FacebookAdapter } from '../src/adapters/facebook/FacebookAdapter';
+import { FacebookAdapter, facebookOwnerFromTitle, facebookOwnerFromUrl } from '../src/adapters/facebook/FacebookAdapter';
 import { InstagramAdapter } from '../src/adapters/instagram/InstagramAdapter';
 import { TikTokAdapter } from '../src/adapters/tiktok/TikTokAdapter';
 import { TikTokMediaDownloader } from '../src/adapters/tiktok/TikTokMediaDownloader';
 import { XAdapter } from '../src/adapters/x/XAdapter';
+import { getSessionUserId, getSessionUserIds, setSessionUser } from '../src/api/session';
+import { extractPostMedia, storedMediaPath } from '../src/etl/extract/MediaExtractor';
 import { ArchiveStore, compareArchives, StoredArchive } from '../src/etl/load/ArchiveStore';
 import { InMemoryDataLoader } from '../src/etl/load/DataLoader';
 import { clearDevelopmentArchives } from '../src/etl/load/DevelopmentArchiveCleanup';
 import { MntlUserStore } from '../src/etl/load/MntlUserStore';
+import { identityKey, minimizeLike } from '../src/etl/load/Identity';
+import { OptOutStore } from '../src/etl/load/OptOutStore';
 import { LikeSchema, PostSchema } from '../src/types/schemas';
+
+process.env.FINGERPRINT_SECRET = 'test-fingerprint-secret';
 
 function createPost(originalPlatformId: string, content: string) {
   return PostSchema.parse({
@@ -321,7 +327,8 @@ test('matches likes and comments across TikTok archives by direct video ID', () 
   assert.equal(match.postId, postId);
   assert.deepEqual(match.current.map(interaction => interaction.type), ['like']);
   assert.deepEqual(match.other.map(interaction => interaction.type), ['comment']);
-  assert.equal(match.other[0].content, '🥰');
+  // The other user's comment text is not shared through comparisons.
+  assert.equal(match.other[0].content, undefined);
 });
 
 test('does not detect a platform from generic post, comment, data, or video names', () => {
@@ -646,8 +653,8 @@ test('persists account archives and matches relationships and likes across accou
     assert.equal(comparison.follows, 'mutual');
     assert.equal(comparison.youFollowThem, true);
     assert.equal(comparison.theyFollowYou, true);
-    assert.deepEqual(comparison.sharedFollowing, ['common-following']);
-    assert.deepEqual(comparison.sharedFollowers, ['common-follower']);
+    assert.equal(comparison.sharedFollowingCount, 1);
+    assert.equal(comparison.sharedFollowersCount, 1);
     assert.deepEqual(
       comparison.likesOnTheirPosts.map(match => match.matchType),
       ['id', 'text']
@@ -1171,19 +1178,20 @@ test('stores selected X relationships as exact-ID claims without deciding in the
     assert.equal(aliceClaims.length, 3);
     const incomingClaim = aliceClaims.find(claim => claim.direction === 'target_follows_source');
     const outgoingClaim = aliceClaims.find(claim =>
-      claim.direction === 'source_follows_target' && claim.targetAccount.platformAccountId === '3003'
+      claim.direction === 'source_follows_target' &&
+      claim.targetIdentityMatch.value === identityKey('platform_account_id', 'x', '3003')
     );
     const pendingWithdrawnClaim = aliceClaims.find(claim =>
-      claim.targetAccount.platformAccountId === '4004'
+      claim.targetIdentityMatch.value === identityKey('platform_account_id', 'x', '4004')
     );
     assert.ok(incomingClaim);
     assert.ok(outgoingClaim);
     assert.ok(pendingWithdrawnClaim);
-    assert.equal(incomingClaim.targetAccount.handle, 'bob_handle');
     assert.deepEqual(incomingClaim.targetIdentityMatch, {
       type: 'platform_account_id',
-      value: '2002',
+      value: identityKey('platform_account_id', 'x', '2002'),
     });
+    assert.equal(JSON.stringify(aliceClaims).includes('2002'), false);
     assert.equal(incomingClaim.verified, false);
     assert.equal(incomingClaim.status, 'pending_identity_match');
     assert.deepEqual(incomingClaim.confirmations, {});
@@ -1265,7 +1273,7 @@ test('matches Instagram relationship claims by normalized account handle', async
     assert.equal(saved.relationshipClaims?.[0].direction, 'target_follows_source');
     assert.deepEqual(saved.relationshipClaims?.[0].targetIdentityMatch, {
       type: 'handle',
-      value: 'somefollower',
+      value: identityKey('handle', 'instagram', 'somefollower'),
     });
     assert.equal(
       (await store.findRelationshipClaimsForIdentity('instagram', { handle: '@SOMEFOLLOWER' })).length,
@@ -1333,8 +1341,8 @@ test('defaults selections to all archive data and compares only selected items',
     assert.equal(comparison.follows, null);
     assert.equal(comparison.youFollowThem, false);
     assert.equal(comparison.theyFollowYou, false);
-    assert.deepEqual(comparison.sharedFollowing, ['common-following']);
-    assert.deepEqual(comparison.sharedFollowers, ['common-follower']);
+    assert.equal(comparison.sharedFollowingCount, 1);
+    assert.equal(comparison.sharedFollowersCount, 1);
     assert.equal(comparison.likesOnTheirPosts[0].postId, 'bob-post-id');
     assert.equal(comparison.likesOnTheirPosts[0].postCaption, 'Bob post caption');
     assert.equal(comparison.likesOnTheirPosts[0].matchType, 'id');
@@ -1489,4 +1497,427 @@ test('does not compare archives from the same owner or a different platform', ()
   const differentPlatform = { ...other, platform: 'facebook' as const };
 
   assert.throws(() => compareArchives(base, differentPlatform), /different platforms/);
+});
+
+test('keeps a separate signed session for each profile used in the browser', () => {
+  const cookies: string[] = [];
+  const response = { cookie: (name: string, value: string) => { cookies.push(`${name}=${value}`); } } as any;
+  setSessionUser(response, 'alice-id');
+  setSessionUser(response, 'bob-id');
+  const requestWith = (cookie: string, profile?: string) => ({
+    headers: { cookie: `other=1; ${cookie}` },
+    get: (name: string) => name.toLowerCase() === 'x-mntl-user' ? profile : undefined,
+  }) as any;
+  const bothSessions = cookies.join('; ');
+
+  assert.deepEqual(getSessionUserIds(requestWith(bothSessions)), ['alice-id', 'bob-id']);
+  assert.equal(getSessionUserId(requestWith(bothSessions, 'alice-id')), 'alice-id');
+  assert.equal(getSessionUserId(requestWith(bothSessions, 'bob-id')), 'bob-id');
+  assert.equal(getSessionUserId(requestWith(bothSessions)), null);
+  assert.equal(getSessionUserId(requestWith(cookies[0])), 'alice-id');
+  assert.equal(getSessionUserId(requestWith(cookies[0], 'bob-id')), null);
+  assert.equal(getSessionUserId(requestWith(cookies[0].replace(/alice-id/g, 'bob-id'))), null);
+  assert.equal(getSessionUserId(requestWith(cookies[0].replace('mntl_session_alice-id', 'mntl_session_bob-id'))), null);
+});
+
+test('copies post media out of the archive and serves only stored files', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'media-extract-test-'));
+  const archivePath = join(directory, 'archive.zip');
+  const mediaRoot = join(directory, 'media');
+  const archiveId = 'a'.repeat(32);
+  const zip = new AdmZip();
+  zip.addFile('export/media/posts/photo.jpg', Buffer.from('photo'));
+  zip.addFile('export/messages/inbox/chat.json', Buffer.from('{}'));
+  zip.addFile('your_facebook_activity/posts/media/your_posts/123.jpg', Buffer.from('facebook'));
+  zip.addFile('your_facebook_activity/messages/inbox/chat/photos/9.jpg', Buffer.from('private'));
+  zip.writeZip(archivePath);
+
+  try {
+    const [post, facebookPost] = await extractPostMedia(archivePath, archiveId, [{
+      ...createPost('post-1', 'Caption'),
+      mediaUrls: ['media/posts/photo.jpg', 'messages/inbox/chat.json', 'media/missing.jpg'],
+    }, {
+      ...createPost('post-2', 'Facebook'),
+      mediaUrls: ['your_facebook_activity/posts/media/your_posts/123.jpg', 'your_facebook_activity/messages/inbox/chat/photos/9.jpg'],
+    }], mediaRoot);
+    const [storedName, ...unchanged] = post.mediaUrls!;
+    const [facebookName, privateUri] = facebookPost.mediaUrls!;
+    assert.equal(readFileSync(storedMediaPath(archiveId, facebookName, mediaRoot)!, 'utf8'), 'facebook');
+    assert.equal(privateUri, 'your_facebook_activity/messages/inbox/chat/photos/9.jpg');
+
+    assert.match(storedName, /^[a-f0-9]{32}\.jpg$/);
+    assert.deepEqual(unchanged, ['messages/inbox/chat.json', 'media/missing.jpg']);
+    const storedPath = storedMediaPath(archiveId, storedName, mediaRoot);
+    assert.equal(readFileSync(storedPath!, 'utf8'), 'photo');
+    assert.equal(storedMediaPath(archiveId, 'media/posts/photo.jpg', mediaRoot), null);
+    assert.equal(storedMediaPath(archiveId, '../mntl-users.json', mediaRoot), null);
+    assert.equal(storedMediaPath('../data', storedName, mediaRoot), null);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('hides posts other MNTL users did not select from activity', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'activity-selection-test-'));
+  const store = new ArchiveStore(directory);
+  const alice: StoredArchive = {
+    archiveId: 'alice-activity-selection',
+    ownerId: 'alice_ig',
+    mntlUserId: 'alice-id',
+    mntlHandle: 'mntl_alice',
+    platform: 'instagram',
+    importedAt: '2026-01-01T00:00:00.000Z',
+    followers: [],
+    following: [],
+    posts: [],
+    likes: [createLike('bob-private-post')],
+  };
+  const bob: StoredArchive = {
+    archiveId: 'bob-activity-selection',
+    ownerId: 'bob_ig',
+    mntlUserId: 'bob-id',
+    mntlHandle: 'mntl_bob',
+    platform: 'instagram',
+    importedAt: '2026-01-02T00:00:00.000Z',
+    followers: [],
+    following: [],
+    posts: [createPost('bob-private-post', 'Not for sharing')],
+    likes: [],
+  };
+
+  try {
+    await store.save(alice);
+    await store.save(bob);
+    await store.saveSelection(bob.archiveId, { postIds: [], followers: [], following: [] });
+    const [activity] = await store.getMntlActivities('alice-id');
+    assert.equal(activity.target.type, 'unknown');
+    assert.equal(activity.target.text, undefined);
+    assert.equal(activity.target.ownerHandle, undefined);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+// Facebook stores UTF-8 text as Latin-1 escapes; this mimics that encoding.
+function facebookJson(value: unknown): Buffer {
+  return Buffer.from(JSON.stringify(value).replace(/[^\x00-\x7f]/gu, char =>
+    [...Buffer.from(char, 'utf8')].map(byte => `\\u00${byte.toString(16).padStart(2, '0')}`).join('')
+  ));
+}
+
+test('extracts Facebook profile, posts, friends, reactions, and comments', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'facebook-adapter-test-'));
+  const archivePath = join(directory, 'archive.zip');
+  const zip = new AdmZip();
+  zip.addFile('personal_information/profile_information/profile_information.json', facebookJson({
+    profile_v2: { name: { full_name: 'Zoë Owner' }, profile_uri: 'https://www.facebook.com/profile.php?id=1001', registration_timestamp: 1600000000 },
+  }));
+  zip.addFile('your_facebook_activity/posts/your_posts__check_ins__photos_and_videos_1.json', facebookJson([
+    {
+      timestamp: 1700000000,
+      attachments: [{ data: [
+        { media: { uri: 'your_facebook_activity/posts/media/your_posts/111.jpg' } },
+        { media: { uri: 'your_facebook_activity/posts/media/stickers_used/222.webp' } },
+      ] }],
+      data: [{ post: 'Trip with @[2002:2048:Reno Goelen] — great!' }, { update_timestamp: 1700000000 }],
+    },
+    { timestamp: 1700000100, data: [{ update_timestamp: 1700000100 }], title: 'Zoë Owner updated her status.' },
+  ]));
+  zip.addFile('your_facebook_activity/posts/your_videos.json', facebookJson({ videos_v2: [
+    { uri: 'your_facebook_activity/posts/media/videos/333.mp4', creation_timestamp: 1700000200, description: '' },
+  ] }));
+  zip.addFile('your_facebook_activity/posts/your_uncategorized_photos.json', facebookJson({ other_photos_v2: [
+    { uri: 'your_facebook_activity/posts/media/your_posts/111.jpg', creation_timestamp: 1700000000 },
+  ] }));
+  zip.addFile('your_facebook_activity/posts/trash.json', facebookJson({ trash_v2: [{ timestamp: 1, data: [{ post: 'deleted' }] }] }));
+  zip.addFile('connections/friends/your_friends.json', facebookJson({ friends_v2: [{ name: 'Renée Friend', timestamp: 1690000000 }] }));
+  zip.addFile("connections/followers/who_you've_followed.json", facebookJson({ following_v3: [{ name: 'Some Page', timestamp: 1690000001 }] }));
+  zip.addFile('your_facebook_activity/comments_and_reactions/likes_and_reactions.json', facebookJson([
+    {
+      timestamp: 1700000300,
+      label_values: [
+        { label: 'Reactie', value: 'Geweldig' },
+        { label: 'URL', value: 'https://www.facebook.com/reno.goelen/posts/pfbid0abc', href: 'https://www.facebook.com/reno.goelen/posts/pfbid0abc' },
+        { label: 'Titel', value: '' },
+        { label: 'Naam', value: 'Reno Goelen' },
+      ],
+      fbid: '444',
+    },
+    {
+      timestamp: 1700000400,
+      label_values: [
+        { label: 'Reaction', value: 'Like' },
+        { label: 'URL', href: 'https://www.facebook.com/permalink.php?story_fbid=pfbid0def&id=555&comment_id=666' },
+        { dict: [{ dict: [{ label: 'Name', value: 'Comment Author' }], title: '' }] },
+      ],
+      fbid: '666',
+    },
+  ]));
+  zip.addFile('your_facebook_activity/comments_and_reactions/likes_and_reactions_1.json', facebookJson([
+    { timestamp: 1700000301, data: [{ reaction: { reaction: 'LOVE', actor: 'Zoë Owner' } }], title: 'Zoë Owner heeft gereageerd op het bericht van Reno Goelen.' },
+    { timestamp: 1650000000, data: [{ reaction: { reaction: 'LIKE', actor: 'Zoë Owner' } }], title: 'Zoë Owner vindt het bericht van Danssport Vlaanderen leuk.' },
+  ]));
+  zip.addFile('your_facebook_activity/comments_and_reactions/comments.json', facebookJson({ comments_v2: [
+    { timestamp: 1700000500, data: [{ comment: { timestamp: 1700000500, comment: 'Mooi zo! 😊', author: 'Zoë Owner' } }], title: "Zoë Owner commented on Jane D'haen's photo." },
+    { timestamp: 1700000600, data: [{ comment: { timestamp: 1700000600, comment: '', author: 'Zoë Owner' } }], title: 'Zoë Owner commented on a post.' },
+  ] }));
+  zip.writeZip(archivePath);
+
+  try {
+    const adapter = new FacebookAdapter();
+    assert.equal(adapter.detect(new AdmZip(archivePath).getEntries().map(entry => entry.entryName)), true);
+
+    const [user] = await adapter.extractUsers(archivePath);
+    assert.equal(user.username, '1001');
+    assert.equal(user.displayName, 'Zoë Owner');
+
+    const posts = await adapter.extractPosts(archivePath);
+    assert.equal(posts.length, 2);
+    assert.equal(posts[0].content, 'Trip with @Reno Goelen — great!');
+    assert.deepEqual(posts[0].mentions, ['Reno Goelen']);
+    assert.deepEqual(posts[0].mediaUrls, ['your_facebook_activity/posts/media/your_posts/111.jpg']);
+    assert.equal(posts[1].originalPlatformId, '333');
+    assert.equal(posts[1].postType, 'reel');
+
+    const relations = await adapter.extractFollowRelations(archivePath);
+    assert.deepEqual(relations.map(relation => [relation.followingId, relation.relationship]), [
+      ['Renée Friend', 'friend'],
+      ['Some Page', 'follow'],
+    ]);
+    assert.deepEqual(await adapter.describeLimitations(archivePath), []);
+
+    const likes = await adapter.extractLikes(archivePath);
+    assert.equal(likes.length, 3);
+    assert.deepEqual(
+      likes.map(like => [like.postId, like.postOwnerId, like.postOwnerName]),
+      [
+        ['444', 'reno.goelen', 'Reno Goelen'],
+        ['666', undefined, 'Comment Author'],
+        [likes[2].postId, undefined, 'Danssport Vlaanderen'],
+      ]
+    );
+
+    const comments = await adapter.extractComments(archivePath);
+    assert.equal(comments.length, 1);
+    assert.equal(comments[0].content, 'Mooi zo! 😊');
+    assert.equal(comments[0].postOwnerName, "Jane D'haen");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('reads Facebook content owners from URLs and localized titles', () => {
+  assert.equal(facebookOwnerFromUrl('https://www.facebook.com/reno.goelen/posts/pfbid0abc'), 'reno.goelen');
+  assert.equal(facebookOwnerFromUrl('https://www.facebook.com/permalink.php?story_fbid=x&id=100073428517116'), '100073428517116');
+  assert.equal(facebookOwnerFromUrl('https://www.facebook.com/groups/samplesize/permalink/1/'), undefined);
+  assert.equal(facebookOwnerFromUrl('https://www.facebook.com/reel/123'), undefined);
+  assert.equal(facebookOwnerFromUrl('https://example.com/reno.goelen'), undefined);
+  assert.equal(facebookOwnerFromTitle("Reno Goelen reacted to The Labour Party's post."), 'The Labour Party');
+  assert.equal(facebookOwnerFromTitle('Reno Goelen replied to his own comment.'), undefined);
+  assert.equal(facebookOwnerFromTitle('Sofie heeft gereageerd op een foto van Kelly Van Houdt.'), 'Kelly Van Houdt');
+  assert.equal(facebookOwnerFromTitle('Sofie heeft een opmerking geplaatst bij de reel van  Cognitief-sterk-werk.'), 'Cognitief-sterk-werk');
+});
+
+test('attributes Facebook activity to the MNTL owner of the reacted-to content', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'facebook-activity-test-'));
+  const store = new ArchiveStore(directory);
+  const facebookArchive = (overrides: Partial<StoredArchive>): StoredArchive => ({
+    archiveId: 'archive',
+    ownerId: 'owner',
+    platform: 'facebook',
+    importedAt: '2026-01-01T00:00:00.000Z',
+    followers: [],
+    following: [],
+    posts: [],
+    likes: [],
+    ...overrides,
+  });
+  const sofie = facebookArchive({
+    archiveId: 'sofie-facebook',
+    ownerId: '100079198850319',
+    ownerHandle: '100079198850319',
+    ownerName: 'Youme Sofie',
+    mntlUserId: 'sofie-id',
+    mntlHandle: 'mntl_sofie',
+    likes: [
+      LikeSchema.parse({ userId: '100079198850319', postId: '444', platform: 'facebook', postOwnerId: 'Reno.Goelen', likedAt: new Date('2026-10-25T00:00:00Z') }),
+      LikeSchema.parse({ userId: '100079198850319', postId: '555', platform: 'facebook', postOwnerName: 'reno  goelen', likedAt: new Date('2026-10-24T00:00:00Z') }),
+      LikeSchema.parse({ userId: '100079198850319', postId: '666', platform: 'facebook', postOwnerName: 'Gina Moons', likedAt: new Date('2026-10-23T00:00:00Z') }),
+    ],
+  });
+  const reno = facebookArchive({
+    archiveId: 'reno-facebook',
+    ownerId: 'reno.goelen',
+    ownerHandle: 'reno.goelen',
+    ownerName: 'Reno Goelen',
+    mntlUserId: 'reno-id',
+    mntlHandle: 'mntl_reno',
+  });
+
+  try {
+    await store.save(sofie);
+    await store.save(reno);
+    const activities = await store.getMntlActivities('sofie-id');
+    assert.deepEqual(activities.map(activity => [activity.target.platformPostId, activity.target.ownerHandle]), [
+      ['444', 'mntl_reno'],
+      ['555', 'mntl_reno'],
+      ['666', undefined],
+    ]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('connects Facebook friends across archives by display name, apart from following', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'facebook-connection-test-'));
+  const store = new ArchiveStore(directory);
+  const base = { platform: 'facebook' as const, posts: [], likes: [], followers: [], importedAt: '2026-01-01T00:00:00.000Z' };
+  const alice: StoredArchive = {
+    ...base, archiveId: 'alice-fb', ownerId: 'alice.smith', ownerHandle: 'alice.smith', ownerName: 'Alice Smith',
+    mntlUserId: 'alice-id', mntlHandle: 'mntl_alice', friends: ['Bob Jones', 'Carol Page'], following: [],
+  };
+  const bob: StoredArchive = {
+    ...base, archiveId: 'bob-fb', ownerId: '2002', ownerHandle: '2002', ownerName: 'Bob Jones',
+    mntlUserId: 'bob-id', mntlHandle: 'mntl_bob', friends: ['alice  SMITH'], following: [],
+  };
+
+  try {
+    await store.save(alice);
+    await store.save(bob);
+    const saved = await store.saveSelection(alice.archiveId, { postIds: [], followers: [], following: [], friends: ['Bob Jones'] });
+    assert.deepEqual(saved.relationshipClaims?.map(claim => claim.direction), ['mutual_friends']);
+    const expected = [{ platform: 'facebook', youFollowThem: false, theyFollowYou: false, friends: true }];
+    assert.deepEqual((await store.getMntlConnections('alice-id')).map(connection => connection.platforms), [expected]);
+    assert.deepEqual((await store.getMntlConnections('bob-id')).map(connection => connection.platforms), [expected]);
+
+    // The friendship key is the same whichever friend's archive it comes from.
+    const fromBob = await store.saveSelection(bob.archiveId, { postIds: [], followers: [], following: [], friends: ['alice  SMITH'] });
+    assert.equal(fromBob.relationshipClaims?.[0].relationshipKey, saved.relationshipClaims?.[0].relationshipKey);
+
+    const comparison = compareArchives(saved, bob);
+    assert.equal(comparison.areFriends, true);
+    assert.equal(comparison.follows, null);
+
+    const confirmed = await store.confirmSelection(alice.archiveId);
+    assert.deepEqual(confirmed.friends, ['Bob Jones']);
+    await assert.rejects(store.saveSelection(alice.archiveId, {
+      postIds: [], followers: [], following: [], friends: ['Carol Page'],
+    }), /not present in this archive/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('warns when a Facebook export only covers a limited date range', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'facebook-range-test-'));
+  const archivePath = join(directory, 'archive.zip');
+  const zip = new AdmZip();
+  zip.addFile('personal_information/profile_information/profile_information.json', facebookJson({
+    profile_v2: { name: { full_name: 'Old Account' }, username: 'old.account', registration_timestamp: Date.parse('2018-01-01') / 1000 },
+  }));
+  zip.addFile('connections/friends/your_friends.json', facebookJson({ friends_v2: [
+    { name: 'Recent Friend', timestamp: Date.parse('2025-11-01') / 1000 },
+    { name: 'Newer Friend', timestamp: Date.parse('2026-09-01') / 1000 },
+  ] }));
+  zip.addFile('your_facebook_activity/comments_and_reactions/comments.json', facebookJson({ comments_v2: [] }));
+  zip.writeZip(archivePath);
+
+  try {
+    const [warning] = await new FacebookAdapter().describeLimitations(archivePath);
+    assert.match(warning, /only contains data from 2025-11-01 onwards/);
+    assert.match(warning, /"All time"/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('stores only fingerprints of other people\'s post text and identities', () => {
+  const like = minimizeLike(LikeSchema.parse({
+    userId: 'me',
+    postId: 'post-1',
+    platform: 'facebook',
+    postText: 'Someone else\'s caption',
+    postOwnerId: 'jane.doe',
+    postOwnerName: 'Jane Doe',
+  }));
+  assert.equal(like.postText, undefined);
+  assert.equal(like.postOwnerId, undefined);
+  assert.equal(like.postOwnerName, undefined);
+  assert.match(like.postTextKey!, /^[a-f0-9]{64}$/);
+  assert.equal(JSON.stringify(like).includes('Jane'), false);
+  assert.equal(JSON.stringify(like).includes('caption'), false);
+});
+
+test('matches liked posts by caption fingerprint after minimization', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'fingerprint-match-test-'));
+  const store = new ArchiveStore(directory);
+  const base = { platform: 'instagram' as const, followers: [], following: [], importedAt: '2026-01-01T00:00:00.000Z' };
+  try {
+    await store.save({
+      ...base, archiveId: 'alice-fp', ownerId: 'alice', mntlUserId: 'alice-id', mntlHandle: 'mntl_alice', posts: [],
+      likes: [minimizeLike({ ...createLike('unknown-id', '  Sunset   at the BEACH '), userId: 'alice' })],
+    });
+    await store.save({
+      ...base, archiveId: 'bob-fp', ownerId: 'bob', mntlUserId: 'bob-id', mntlHandle: 'mntl_bob',
+      posts: [createPost('bob-post', 'Sunset at the beach')], likes: [],
+    });
+    const [activity] = await store.getMntlActivities('alice-id');
+    assert.equal(activity.target.platformPostId, 'bob-post');
+    assert.equal(activity.target.ownerHandle, 'mntl_bob');
+    assert.equal(activity.target.text, 'Sunset at the beach');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('deletes unselected relationships on confirmation or after the selection window', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'retention-test-'));
+  const store = new ArchiveStore(directory, new OptOutStore(join(directory, '..', `${Date.now()}-opt-outs.json`)));
+  const base = { platform: 'instagram' as const, posts: [], likes: [], followers: ['kept', 'dropped'], following: ['kept', 'dropped'] };
+  try {
+    await store.save({ ...base, archiveId: 'confirmed', ownerId: 'a', importedAt: new Date().toISOString() });
+    await store.save({ ...base, archiveId: 'stale', ownerId: 'b', importedAt: '2026-01-01T00:00:00.000Z' });
+    await store.save({ ...base, archiveId: 'fresh', ownerId: 'c', importedAt: new Date().toISOString() });
+    for (const archiveId of ['confirmed', 'stale', 'fresh']) {
+      await store.saveSelection(archiveId, { postIds: [], followers: ['kept'], following: ['kept'] });
+    }
+
+    const confirmed = await store.confirmSelection('confirmed');
+    assert.deepEqual([confirmed.followers, confirmed.following], [['kept'], ['kept']]);
+    assert.ok(confirmed.selectionConfirmedAt);
+
+    await store.applyRetention(new Date('2026-03-01T00:00:00.000Z'));
+    assert.deepEqual((await store.get('stale'))?.followers, ['kept']);
+    assert.deepEqual((await store.get('fresh'))?.followers, ['kept', 'dropped']);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('expires unconfirmed claims after a year and removes people who opted out', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'opt-out-test-'));
+  const store = new ArchiveStore(join(directory, 'archives'), new OptOutStore(join(directory, 'opt-outs.json')));
+  try {
+    await store.save({
+      archiveId: 'fb-archive', ownerId: 'owner', ownerName: 'Owner Name', platform: 'facebook',
+      importedAt: new Date().toISOString(), posts: [], likes: [],
+      followers: ['Jane Doe', 'John Roe'], following: ['Jane Doe'], mntlUserId: 'owner-id', mntlHandle: 'mntl_owner',
+    });
+    await store.saveSelection('fb-archive', { postIds: [], followers: ['Jane Doe', 'John Roe'], following: ['Jane Doe'] });
+    assert.equal((await store.get('fb-archive'))?.relationshipClaims?.length, 3);
+
+    await store.optOut('facebook', 'jane  DOE');
+    const archive = await store.get('fb-archive');
+    assert.deepEqual(archive?.followers, ['John Roe']);
+    assert.deepEqual(archive?.following, []);
+    assert.deepEqual(archive?.selection?.followers, ['John Roe']);
+    assert.equal(archive?.relationshipClaims?.length, 1);
+    assert.equal(readFileSync(join(directory, 'opt-outs.json'), 'utf8').includes('Jane'), false);
+
+    await store.saveSelection('fb-archive', { postIds: [], followers: ['John Roe'], following: [] });
+    await store.applyRetention(new Date(Date.now() + 366 * 24 * 60 * 60 * 1000));
+    assert.deepEqual((await store.get('fb-archive'))?.relationshipClaims, []);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

@@ -15,7 +15,6 @@ This tool uses a modular ETL (Extract, Transform, Load) pattern with a factory-b
 
 - **Runtime**: Node.js with TypeScript
 - **ZIP Extraction**: `adm-zip`
-- **Data Parsing**: `csv-parser`, `stream-json`
 - **Validation**: `zod`
 - **Job Queue**: In-memory queue (optional `bullmq` with Redis for production)
 - **API**: Express with `multer` for file uploads
@@ -250,10 +249,10 @@ stable relationship key for deduplicating claims made from either side, and
 the archive/import provenance. Claims are explicitly unverified user-provided
 archive evidence; importing one does not create or confirm an MNTL follow.
 
-X identities are matched by exact exported account ID. Instagram and TikTok
-identities whose relationship exports contain usernames are matched by a
-case-insensitive, `@`-independent handle; other identities use an exact
-platform account ID unless a known handle is available. Saving a selection
+X identities are matched by exact exported account ID, Instagram and TikTok
+identities by a case-insensitive, `@`-independent handle, and Facebook
+identities by display name. Identities and relationship keys are stored as
+keyed fingerprints, never as plain text (see Privacy). Saving a selection
 records the relationship reported by that profile's archive. When the other
 account has uploaded a matching archive under a different MNTL profile, the
 migration tool shows the discovered MNTL handle and matching platform(s).
@@ -414,9 +413,13 @@ Get list of supported platforms.
 - Extracts hashtags and mentions from captions
 
 ### Facebook
-- Detects Facebook-specific archive paths or filenames
-- Parses JSON data with nested structures
-- Handles reactions, comments, and shares metrics
+- Detects archives by their `your_facebook_activity/` folder
+- Repairs Facebook's text encoding (UTF-8 stored as Latin-1 escapes) and reads English and Dutch labels
+- Imports posts, standalone photos, videos, and albums; skips trash, archived posts, stickers, and messages
+- Friends are both followers and following (friendship is mutual); followed profiles are following only
+- Relationship lists only contain display names, so Facebook claims match by display name
+- Reactions and comments record the content owner (from the URL, name label, or title), so activity is
+  attributed to the owner's MNTL profile even when the exact post is not in their archive
 
 ### X (Twitter)
 - Detects Twitter-specific archive paths or `tweets.js` files, not generic `data` filenames
@@ -437,6 +440,25 @@ Get list of supported platforms.
 - Also supports legacy `video_data.json` and `posts.csv` post exports
 - Handles video-specific metrics (views, shares)
 - Extracts hashtags and mentions from descriptions
+
+## Privacy
+
+Archives contain data about people who never joined MNTL. The tool keeps only what matching needs:
+
+- **Raw exports are deleted** after import. Only post media is copied out; messages are never extracted.
+- **Access is per user.** A signed session cookie is issued when a profile is created, and every
+  archive, job, and media request is scoped to its owner. Other users only see media of selected posts.
+- **Third-party data is fingerprinted.** Relationship claims, the text of other people's liked posts,
+  and the owners of liked or commented content are stored as HMAC fingerprints keyed with
+  `FINGERPRINT_SECRET` (or `data/fingerprint.key` if unset). Matching compares fingerprints.
+  Losing or changing the key breaks matching for existing data.
+- **Comparisons share counts**, not lists of third-party accounts, and never the other user's comment text.
+- **Retention.** `POST /api/archives/:archiveId/confirm` (sent when the user confirms their selection)
+  deletes unselected followers and following; unconfirmed archives are pruned after 30 days.
+  Unconfirmed claims expire after a year. Retention runs at startup and every 6 hours.
+- **Opt-out.** `POST /api/opt-out` with `{ "platform": "facebook", "account": "Jane Doe" }` removes that
+  identity from all archives and claims and prevents future matches. Only fingerprints are stored.
+  It needs no login, so it can only ever remove data.
 
 ## Integration with Expo App
 

@@ -8,6 +8,23 @@ import {
   Platform,
 } from '../../types/schemas';
 import { normalizeMntlActivities } from './ActivityNormalizer';
+import {
+  identityKey,
+  IdentityType,
+  likeTextKey,
+  normalizeHandle,
+  relationshipIdentityType,
+  relationshipKey as createRelationshipKey,
+  textKey,
+} from './Identity';
+import { OptOutStore } from './OptOutStore';
+
+// Unconfirmed selections keep their full relationship lists this long before the
+// unselected accounts are deleted. Claims that are never confirmed expire after a year.
+const SELECTION_WINDOW_DAYS = 30;
+const PENDING_CLAIM_DAYS = 365;
+const WITHDRAWN_CLAIM_DAYS = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type RelationshipClaimStatus =
   | 'pending_identity_match'
@@ -16,28 +33,25 @@ export type RelationshipClaimStatus =
   | 'rejected'
   | 'withdrawn';
 
+// Identities are stored as keyed fingerprints (see Identity.ts), never as plain text.
+// Facebook relationship lists only contain display names, so those claims match by name.
+export interface IdentityMatch {
+  type: IdentityType;
+  value: string;
+}
+
 export interface RelationshipClaim {
   claimId: string;
   relationshipKey: string;
   archiveId: string;
   platform: Platform;
-  direction: 'source_follows_target' | 'target_follows_source';
+  direction: 'source_follows_target' | 'target_follows_source' | 'mutual_friends';
   sourceAccount: {
     platformAccountId: string;
     handle?: string;
   };
-  sourceIdentityMatch: {
-    type: 'platform_account_id' | 'handle';
-    value: string;
-  };
-  targetAccount: {
-    platformAccountId: string;
-    handle?: string;
-  };
-  targetIdentityMatch: {
-    type: 'platform_account_id' | 'handle';
-    value: string;
-  };
+  sourceIdentityMatch: IdentityMatch;
+  targetIdentityMatch: IdentityMatch;
   status: RelationshipClaimStatus;
   verified: boolean;
   evidence: {
@@ -68,16 +82,21 @@ export interface StoredArchive {
   archiveId: string;
   ownerId: string;
   ownerHandle?: string;
+  ownerName?: string;
   mntlUserId?: string;
   mntlHandle?: string;
   platform: Platform;
   importedAt: string;
+  importWarnings?: string[];
   followers: string[];
   following: string[];
+  // Facebook only: friendships are mutual and distinct from following.
+  friends?: string[];
   posts: NormalizedPost[];
   likes: NormalizedLike[];
   comments?: NormalizedComment[];
   selection?: ArchiveSelection;
+  selectionConfirmedAt?: string;
   relationshipClaims?: RelationshipClaim[];
 }
 
@@ -85,6 +104,28 @@ export interface ArchiveSelection {
   postIds: string[];
   followers: string[];
   following: string[];
+  friends?: string[];
+}
+
+const RELATIONSHIP_LISTS = ['followers', 'following', 'friends'] as const;
+type RelationshipList = typeof RELATIONSHIP_LISTS[number];
+
+function relationshipList(source: StoredArchive | ArchiveSelection, list: RelationshipList): string[] {
+  return source[list] || [];
+}
+
+// Applies a filter to every relationship list an archive and its selection have.
+function filterRelationships(
+  archive: StoredArchive,
+  keep: (list: RelationshipList, accountId: string) => boolean
+): StoredArchive {
+  const selection = archive.selection || defaultSelection(archive);
+  const updated: StoredArchive = { ...archive, selection: { ...selection } };
+  for (const list of RELATIONSHIP_LISTS) {
+    if (archive[list]) updated[list] = archive[list]!.filter(accountId => keep(list, accountId));
+    if (selection[list]) updated.selection![list] = selection[list]!.filter(accountId => keep(list, accountId));
+  }
+  return updated;
 }
 
 export interface ArchiveComparison {
@@ -97,8 +138,10 @@ export interface ArchiveComparison {
   follows: 'following' | 'follower' | 'mutual' | null;
   youFollowThem: boolean;
   theyFollowYou: boolean;
-  sharedFollowing: string[];
-  sharedFollowers: string[];
+  areFriends: boolean;
+  sharedFollowingCount: number;
+  sharedFollowersCount: number;
+  sharedFriendsCount: number;
   likesOnTheirPosts: Array<{
     postId: string;
     postCaption?: string;
@@ -141,33 +184,39 @@ export interface MntlConnection {
     platform: Platform;
     youFollowThem: boolean;
     theyFollowYou: boolean;
+    friends?: boolean;
   }>;
 }
 
 function normalizeUsername(username: string): string {
-  return username.trim().replace(/^@/, '').toLowerCase();
+  return normalizeHandle(username);
 }
 
-function normalizePostText(text: string): string {
-  return text.normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ');
-}
-
-function normalizeAccountHandle(handle: string): string {
-  return handle.trim().replace(/^@/, '').toLowerCase();
+// The identifier other archives' follower and following lists use for this account.
+function relationshipIdentifier(archive: StoredArchive): string {
+  return archive.platform === 'facebook' && archive.ownerName ? archive.ownerName : archive.ownerId;
 }
 
 function normalizeAccountId(platform: Platform, accountId: string): string {
-  return platform === 'x' ? accountId : normalizeAccountHandle(accountId);
+  return platform === 'x' ? accountId : normalizeHandle(accountId);
 }
 
-function createRelationshipKey(
-  platform: Platform,
-  followerId: string,
-  followingId: string
-): string {
-  return createHash('sha256')
-    .update(`${platform}\u0000${normalizeAccountId(platform, followerId)}\u0000${normalizeAccountId(platform, followingId)}`)
-    .digest('hex');
+function relationshipEntryKey(platform: Platform, accountId: string): string {
+  return identityKey(relationshipIdentityType(platform), platform, accountId);
+}
+
+// The identifiers by which other archives may refer to this archive's owner.
+function ownerIdentityValue(type: IdentityType, archive: StoredArchive): string | undefined {
+  if (type === 'display_name') return archive.ownerName;
+  if (type === 'platform_account_id') return archive.ownerId;
+  return archive.ownerHandle ||
+    (archive.platform === 'instagram' || archive.platform === 'tiktok' ? archive.ownerId : undefined);
+}
+
+function ownerIdentityMatch(archive: StoredArchive): IdentityMatch {
+  const preferredType = relationshipIdentityType(archive.platform);
+  const type = ownerIdentityValue(preferredType, archive) ? preferredType : 'platform_account_id';
+  return { type, value: identityKey(type, archive.platform, ownerIdentityValue(type, archive)!) };
 }
 
 function selectedRelationshipOrFallback(
@@ -200,11 +249,10 @@ function findPostMatch(
     if (byShortcode) return { post: byShortcode, matchType: 'shortcode' };
   }
 
-  if (!like.postText) return null;
-  const text = normalizePostText(like.postText);
-  if (!text) return null;
+  const likedTextKey = likeTextKey(like);
+  if (!likedTextKey) return null;
 
-  const matches = posts.filter(post => post.content && normalizePostText(post.content) === text);
+  const matches = posts.filter(post => textKey(post.platform, post.content) === likedTextKey);
   return matches.length === 1 ? { post: matches[0], matchType: 'text' } : null;
 }
 
@@ -256,7 +304,6 @@ function getPostInteractions(archive: StoredArchive): Map<
   for (const like of archive.likes) {
     add(like.postId, like.postUrl, {
       type: 'like',
-      content: like.postText,
       postUrl: like.postUrl,
       occurredAt: like.likedAt,
     });
@@ -285,25 +332,24 @@ export function compareArchives(
   const currentFollowsOther = selectedRelationshipOrFallback(
     current.following,
     currentSelection.following,
-    other.ownerId,
+    relationshipIdentifier(other),
     other.followers,
     otherSelection.followers,
-    current.ownerId
+    relationshipIdentifier(current)
   );
   const otherFollowsCurrent = selectedRelationshipOrFallback(
     current.followers,
     currentSelection.followers,
-    other.ownerId,
+    relationshipIdentifier(other),
     other.following,
     otherSelection.following,
-    current.ownerId
+    relationshipIdentifier(current)
   );
-  const sharedFollowing = currentSelection.following.filter(name =>
-    otherSelection.following.some(otherName => normalizeUsername(otherName) === normalizeUsername(name))
-  );
-  const sharedFollowers = currentSelection.followers.filter(name =>
-    otherSelection.followers.some(otherName => normalizeUsername(otherName) === normalizeUsername(name))
-  );
+  // Only counts are shared: the accounts themselves are mostly people outside MNTL.
+  const countShared = (currentAccounts: string[], otherAccounts: string[]) => {
+    const otherKeys = new Set(otherAccounts.map(accountId => relationshipEntryKey(other.platform, accountId)));
+    return currentAccounts.filter(accountId => otherKeys.has(relationshipEntryKey(other.platform, accountId))).length;
+  };
   const currentSelectedPosts = current.posts.filter(post =>
     currentSelection.postIds.includes(post.originalPlatformId)
   );
@@ -333,7 +379,8 @@ export function compareArchives(
     .map(postId => ({
       postId,
       current: currentInteractions.get(postId)!,
-      other: otherInteractions.get(postId)!,
+      // The other user's comment text is theirs to share, not part of this comparison.
+      other: otherInteractions.get(postId)!.map(({ content: _content, ...interaction }) => interaction),
     }));
   return {
     archiveId: other.archiveId,
@@ -351,8 +398,17 @@ export function compareArchives(
         : otherFollowsCurrent
           ? 'follower'
           : null,
-    sharedFollowing,
-    sharedFollowers,
+    areFriends: selectedRelationshipOrFallback(
+      relationshipList(current, 'friends'),
+      relationshipList(currentSelection, 'friends'),
+      relationshipIdentifier(other),
+      relationshipList(other, 'friends'),
+      relationshipList(otherSelection, 'friends'),
+      relationshipIdentifier(current)
+    ),
+    sharedFollowingCount: countShared(currentSelection.following, otherSelection.following),
+    sharedFollowersCount: countShared(currentSelection.followers, otherSelection.followers),
+    sharedFriendsCount: countShared(relationshipList(currentSelection, 'friends'), relationshipList(otherSelection, 'friends')),
     likesOnTheirPosts: matchesFor(current.likes, otherSelectedPosts),
     theyLikeYourPosts: otherFollowsCurrent ? matchesFor(other.likes, currentSelectedPosts) : [],
     sharedPostInteractions,
@@ -364,6 +420,7 @@ function defaultSelection(archive: StoredArchive): ArchiveSelection {
     postIds: archive.posts.map(post => post.originalPlatformId),
     followers: archive.followers,
     following: archive.following,
+    ...(archive.friends ? { friends: archive.friends } : {}),
   };
 }
 
@@ -387,14 +444,16 @@ function hydrateArchiveDates(archive: StoredArchive): StoredArchive {
 function isSelection(value: unknown): value is ArchiveSelection {
   if (!value || typeof value !== 'object') return false;
   const selection = value as Record<string, unknown>;
-  return ['postIds', 'followers', 'following'].every(
-    key => Array.isArray(selection[key]) && (selection[key] as unknown[]).every(item => typeof item === 'string')
-  );
+  const isStringList = (key: string) =>
+    Array.isArray(selection[key]) && (selection[key] as unknown[]).every(item => typeof item === 'string');
+  return ['postIds', 'followers', 'following'].every(isStringList) &&
+    (selection.friends === undefined || isStringList('friends'));
 }
 
 export class ArchiveStore {
   constructor(
-    private readonly directory = path.join(process.cwd(), 'data', 'archives')
+    private readonly directory = path.join(process.cwd(), 'data', 'archives'),
+    private readonly optOuts = new OptOutStore()
   ) {}
 
   async save(archive: StoredArchive): Promise<void> {
@@ -462,26 +521,26 @@ export class ArchiveStore {
     if (!archive) throw new Error(`Stored archive not found: ${archiveId}`);
     if (!isSelection(selection)) throw new Error('Invalid archive selection');
     const allowedPostIds = new Set(archive.posts.map(post => post.originalPlatformId));
-    const allowedFollowers = new Set(archive.followers);
-    const allowedFollowing = new Set(archive.following);
     if (
       selection.postIds.some(id => !allowedPostIds.has(id)) ||
-      selection.followers.some(name => !allowedFollowers.has(name)) ||
-      selection.following.some(name => !allowedFollowing.has(name))
+      RELATIONSHIP_LISTS.some(list => {
+        const allowed = new Set(relationshipList(archive, list));
+        return relationshipList(selection, list).some(accountId => !allowed.has(accountId));
+      })
     ) {
       throw new Error('Selection contains items not present in this archive');
     }
 
-    const uniqueSelection = {
+    const uniqueSelection: ArchiveSelection = {
       postIds: [...new Set(selection.postIds)],
       followers: [...new Set(selection.followers)],
       following: [...new Set(selection.following)],
+      ...(archive.friends ? { friends: [...new Set(relationshipList(selection, 'friends'))] } : {}),
     };
-    const knownHandles = await this.getKnownOwnerHandles(archive.platform);
     const relationshipClaims = this.syncRelationshipClaims(
       archive,
       uniqueSelection,
-      knownHandles,
+      await this.optOuts.keys(),
       archive.relationshipClaims || []
     );
     const updated = { ...archive, selection: uniqueSelection, relationshipClaims };
@@ -489,26 +548,85 @@ export class ArchiveStore {
     return updated;
   }
 
+  // Called when the user confirms their selection: unselected followers, following, and
+  // friends are deleted, since they are mostly people who never chose to be part of MNTL.
+  async confirmSelection(archiveId: string): Promise<StoredArchive> {
+    const archive = await this.get(archiveId);
+    if (!archive) throw new Error(`Stored archive not found: ${archiveId}`);
+    const updated = {
+      ...this.withoutUnselectedRelationships(archive),
+      selectionConfirmedAt: new Date().toISOString(),
+    };
+    await this.save(updated);
+    return updated;
+  }
+
+  async optOut(platform: Platform, account: string): Promise<void> {
+    await this.optOuts.add(platform, account);
+    await this.applyRetention();
+  }
+
+  // Deletes unselected relationships once the selection window has passed, expires
+  // claims that were never confirmed, and removes everyone who opted out.
+  async applyRetention(now = new Date()): Promise<number> {
+    const optOutKeys = await this.optOuts.keys();
+    let updatedCount = 0;
+
+    for (const archive of await this.list()) {
+      let updated = archive;
+      const selectionExpired = now.getTime() - Date.parse(archive.importedAt) > SELECTION_WINDOW_DAYS * DAY_MS;
+      if (!archive.selectionConfirmedAt && selectionExpired) {
+        updated = this.withoutUnselectedRelationships(updated);
+      }
+
+      updated = filterRelationships(updated, (_list, accountId) =>
+        !optOutKeys.has(relationshipEntryKey(archive.platform, accountId))
+      );
+      updated = {
+        ...updated,
+        relationshipClaims: (updated.relationshipClaims || []).filter(claim => {
+          if (optOutKeys.has(claim.targetIdentityMatch.value)) return false;
+          const age = now.getTime() - Date.parse(claim.status === 'withdrawn' ? claim.updatedAt : claim.createdAt);
+          if (claim.status === 'withdrawn') return age <= WITHDRAWN_CLAIM_DAYS * DAY_MS;
+          if (claim.status === 'pending_identity_match' || claim.status === 'awaiting_confirmation') {
+            return age <= PENDING_CLAIM_DAYS * DAY_MS;
+          }
+          return true;
+        }),
+      };
+
+      if (JSON.stringify(updated) !== JSON.stringify(archive)) {
+        await this.save(updated);
+        updatedCount++;
+      }
+    }
+    return updatedCount;
+  }
+
+  private withoutUnselectedRelationships(archive: StoredArchive): StoredArchive {
+    const selection = archive.selection || defaultSelection(archive);
+    const selected = Object.fromEntries(RELATIONSHIP_LISTS.map(list =>
+      [list, new Set(relationshipList(selection, list))]
+    )) as Record<RelationshipList, Set<string>>;
+    return filterRelationships(archive, (list, accountId) => selected[list].has(accountId));
+  }
+
   async findRelationshipClaimsForIdentity(
     platform: Platform,
-    identity: { platformAccountId?: string; handle?: string }
+    identity: { platformAccountId?: string; handle?: string; displayName?: string }
   ): Promise<MatchedRelationshipClaim[]> {
-    const normalizedHandle = identity.handle ? normalizeAccountHandle(identity.handle) : undefined;
-    const platformAccountId = identity.platformAccountId;
-    if (!platformAccountId && !normalizedHandle) return [];
-
-    const matchesIdentity = (
-      match: RelationshipClaim['sourceIdentityMatch']
-    ): boolean => {
-      if (match.type === 'platform_account_id') {
-        return Boolean(platformAccountId && match.value === platformAccountId);
-      }
-      const candidateHandle = normalizedHandle ||
-        (platform !== 'x' && platformAccountId
-          ? normalizeAccountHandle(platformAccountId)
-          : undefined);
-      return Boolean(candidateHandle && normalizeAccountHandle(match.value) === candidateHandle);
-    };
+    const identityKeys = new Set([
+      ...(identity.platformAccountId
+        ? [
+            identityKey('platform_account_id', platform, identity.platformAccountId),
+            ...(platform !== 'x' ? [identityKey('handle', platform, identity.platformAccountId)] : []),
+          ]
+        : []),
+      ...(identity.handle ? [identityKey('handle', platform, identity.handle)] : []),
+      ...(identity.displayName ? [identityKey('display_name', platform, identity.displayName)] : []),
+    ]);
+    if (!identityKeys.size) return [];
+    const matchesIdentity = (match: IdentityMatch) => identityKeys.has(match.value);
 
     return (await this.list()).flatMap(archive =>
       (archive.relationshipClaims || []).flatMap(claim => {
@@ -585,7 +703,9 @@ export class ArchiveStore {
 
         let currentUserFollows = false;
         let otherUserFollows = false;
-        if (claim.direction === 'source_follows_target') {
+        if (claim.direction === 'mutual_friends') {
+          // Friendship is mutual, so it does not imply following either way.
+        } else if (claim.direction === 'source_follows_target') {
           currentUserFollows = sourceArchive.mntlUserId === mntlUserId;
           otherUserFollows = targetArchive.mntlUserId === mntlUserId;
         } else {
@@ -613,11 +733,13 @@ export class ArchiveStore {
             platform: claim.platform,
             youFollowThem: false,
             theyFollowYou: false,
+            ...(claim.platform === 'facebook' ? { friends: false } : {}),
           };
           connection.platforms.push(platformMatch);
         }
         platformMatch.youFollowThem ||= currentUserFollows;
         platformMatch.theyFollowYou ||= otherUserFollows;
+        if (claim.direction === 'mutual_friends') platformMatch.friends = true;
       }
     }
 
@@ -637,27 +759,25 @@ export class ArchiveStore {
       (archive): archive is StoredArchive & { mntlUserId: string; mntlHandle: string } =>
         Boolean(archive.mntlUserId && archive.mntlHandle)
     );
-    const posts = mntlArchives.flatMap(archive =>
-      archive.posts.map(post => ({ archive, post }))
-    );
+    // Other users' posts are only shown if they selected them for migration.
+    const posts = mntlArchives.flatMap(archive => {
+      const visiblePostIds = archive.mntlUserId === mntlUserId
+        ? null
+        : new Set((archive.selection || defaultSelection(archive)).postIds);
+      return archive.posts
+        .filter(post => !visiblePostIds || visiblePostIds.has(post.originalPlatformId))
+        .map(post => ({ archive, post }));
+    });
     return normalizeMntlActivities(
       mntlArchives.filter(archive => archive.mntlUserId === mntlUserId),
-      posts
+      posts,
+      mntlArchives
     );
   }
 
-  private identityMatchesArchive(
-    identity: RelationshipClaim['sourceIdentityMatch'],
-    archive: StoredArchive
-  ): boolean {
-    if (identity.type === 'platform_account_id') {
-      return identity.value === archive.ownerId;
-    }
-    const handle = archive.ownerHandle ||
-      (archive.platform === 'instagram' || archive.platform === 'tiktok'
-        ? archive.ownerId
-        : undefined);
-    return Boolean(handle && normalizeAccountHandle(identity.value) === normalizeAccountHandle(handle));
+  private identityMatchesArchive(identity: IdentityMatch, archive: StoredArchive): boolean {
+    const value = ownerIdentityValue(identity.type, archive);
+    return Boolean(value && identityKey(identity.type, archive.platform, value) === identity.value);
   }
 
   private matchingTargetUserIds(
@@ -683,7 +803,7 @@ export class ArchiveStore {
   private syncRelationshipClaims(
     archive: StoredArchive,
     selection: ArchiveSelection,
-    knownHandles: Map<string, string>,
+    optOutKeys: Set<string>,
     existingClaims: RelationshipClaim[]
   ): RelationshipClaim[] {
     const now = new Date().toISOString();
@@ -698,29 +818,32 @@ export class ArchiveStore {
         accountId,
         direction: 'source_follows_target' as const,
       })),
+      ...relationshipList(selection, 'friends').map(accountId => ({
+        accountId,
+        direction: 'mutual_friends' as const,
+      })),
     ];
 
     for (const { accountId, direction } of selectedRelationships) {
-      const targetHandle = knownHandles.get(accountId) ||
-        (archive.platform === 'instagram' || archive.platform === 'tiktok' ? accountId : undefined);
-      const identityMatch = archive.platform === 'x'
-        ? { type: 'platform_account_id' as const, value: accountId }
-        : targetHandle
-          ? { type: 'handle' as const, value: normalizeAccountHandle(targetHandle) }
-          : { type: 'platform_account_id' as const, value: accountId };
-      const followerId = direction === 'source_follows_target' ? archive.ownerId : accountId;
-      const followingId = direction === 'source_follows_target' ? accountId : archive.ownerId;
-      const relationshipKey = createRelationshipKey(archive.platform, followerId, followingId);
+      const identityMatch: IdentityMatch = {
+        type: relationshipIdentityType(archive.platform),
+        value: relationshipEntryKey(archive.platform, accountId),
+      };
+      if (optOutKeys.has(identityMatch.value)) continue;
+      const owner = relationshipIdentifier(archive);
+      const [followerId, followingId] = direction === 'target_follows_source' ? [accountId, owner] : [owner, accountId];
+      const relationshipKey = createRelationshipKey(
+        archive.platform,
+        followerId,
+        followingId,
+        direction === 'mutual_friends'
+      );
       const claimId = createHash('sha256')
         .update(`${archive.archiveId}\u0000${relationshipKey}`)
         .digest('hex');
       const existing = existingById.get(claimId);
       const isReactivated = existing?.status === 'withdrawn';
-      const sourceIdentityMatch = archive.platform === 'x'
-        ? { type: 'platform_account_id' as const, value: archive.ownerId }
-        : archive.ownerHandle
-          ? { type: 'handle' as const, value: normalizeAccountHandle(archive.ownerHandle) }
-          : { type: 'platform_account_id' as const, value: archive.ownerId };
+      const sourceIdentityMatch = ownerIdentityMatch(archive);
       const confirmations: RelationshipClaim['confirmations'] = isReactivated
         ? {}
         : { ...(existing?.confirmations || {}) };
@@ -742,10 +865,6 @@ export class ArchiveStore {
           handle: archive.ownerHandle,
         },
         sourceIdentityMatch,
-        targetAccount: {
-          platformAccountId: accountId,
-          handle: targetHandle,
-        },
         targetIdentityMatch: identityMatch,
         status: isReactivated
           ? 'pending_identity_match'

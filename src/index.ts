@@ -11,6 +11,13 @@ async function startServer() {
     }
 
     const { app } = await import('./api/server');
+    const { ArchiveStore } = await import('./etl/load/ArchiveStore');
+    const archiveStore = new ArchiveStore();
+    const applyRetention = () => archiveStore.applyRetention()
+      .then(count => count && console.log(`Retention updated ${count} archive(s)`))
+      .catch(error => console.error('Retention failed:', error));
+    await applyRetention();
+    setInterval(applyRetention, 6 * 60 * 60 * 1000).unref();
     const { InMemoryJobQueue } = await import('./queue/InMemoryJobQueue');
     const jobQueue = InMemoryJobQueue.getInstance();
 
@@ -19,17 +26,13 @@ async function startServer() {
       console.log(`Supported platforms: instagram, facebook, x, tiktok`);
     });
 
-    process.on('SIGINT', async () => {
-      console.log('Shutting down gracefully...');
-      await jobQueue.close();
-      process.exit(0);
-    });
-
-    process.on('SIGTERM', async () => {
-      console.log('Shutting down gracefully...');
-      await jobQueue.close();
-      process.exit(0);
-    });
+    for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+      process.on(signal, async () => {
+        console.log('Shutting down gracefully...');
+        await jobQueue.close();
+        process.exit(0);
+      });
+    }
   } catch (error) {
     console.error('Failed to start server:', error);
     process.exit(1);
