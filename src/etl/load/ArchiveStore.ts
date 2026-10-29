@@ -177,6 +177,12 @@ export interface ArchiveComparison {
   }>;
 }
 
+export interface MntlAccountMatch {
+  mntlUserId: string;
+  mntlHandle: string;
+  accountHandle?: string;
+}
+
 export interface MntlConnection {
   mntlUserId: string;
   mntlHandle: string;
@@ -503,6 +509,39 @@ export class ArchiveStore {
       })
     );
     return archives.sort((left, right) => right.importedAt.localeCompare(left.importedAt));
+  }
+
+  // Finds which accounts in a follower, following, or friends list belong to MNTL users,
+  // matched the same way as relationship claims. Ambiguous matches are left out.
+  async findMntlAccounts(
+    platform: Platform,
+    accountIds: string[],
+    excludeMntlUserId?: string
+  ): Promise<Map<string, MntlAccountMatch>> {
+    const type = relationshipIdentityType(platform);
+    const candidatesByKey = new Map<string, Map<string, MntlAccountMatch>>();
+    for (const archive of await this.list()) {
+      const ownerValue = ownerIdentityValue(type, archive);
+      if (archive.platform !== platform || !archive.mntlUserId || !archive.mntlHandle || !ownerValue) continue;
+      if (archive.mntlUserId === excludeMntlUserId) continue;
+      const key = identityKey(type, platform, ownerValue);
+      const candidates = candidatesByKey.get(key) || new Map<string, MntlAccountMatch>();
+      if (!candidates.has(archive.mntlUserId)) {
+        candidates.set(archive.mntlUserId, {
+          mntlUserId: archive.mntlUserId,
+          mntlHandle: archive.mntlHandle,
+          accountHandle: archive.ownerHandle?.trim().replace(/^@/, ''),
+        });
+      }
+      candidatesByKey.set(key, candidates);
+    }
+
+    const matches = new Map<string, MntlAccountMatch>();
+    for (const accountId of accountIds) {
+      const candidates = candidatesByKey.get(relationshipEntryKey(platform, accountId));
+      if (candidates?.size === 1) matches.set(accountId, [...candidates.values()][0]);
+    }
+    return matches;
   }
 
   async getKnownOwnerHandles(platform: Platform): Promise<Map<string, string>> {

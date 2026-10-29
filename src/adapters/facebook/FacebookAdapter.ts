@@ -3,6 +3,7 @@ import { createHash } from 'crypto';
 import * as path from 'path';
 import { BaseAdapter } from '../BaseAdapter';
 import { ZipExtractor } from '../../etl/extract/ZipExtractor';
+import { fixMetaEncoding } from '../metaText';
 import { NormalizedPost, NormalizedUser, NormalizedFollowRelation, NormalizedLike, NormalizedComment, Platform } from '../../types/schemas';
 
 // Exports are localized, so labels are matched in the languages seen in archives.
@@ -13,22 +14,13 @@ const NON_PROFILE_PATHS = new Set([
   'notes', 'pages', 'photo', 'photo.php', 'photos', 'reel', 'reels', 'share', 'stories', 'watch',
 ]);
 const VIDEO_URI_PATTERN = /\.(mp4|mov|webm)$/i;
+// Only posts on the account's own profile feed are imported. Titles are localized;
+// group posts are also recognized through the export's separate group posts file.
+const GROUP_POST_TITLE = /\b(?:posted in|(?:to|with|in) the group)\b|\b(?:met|in) de groep\b/i;
+const OTHER_PROFILE_POST_TITLE =
+  /\b(?:wrote|posted) on .+['’]s (?:timeline|profile)\b|\bto .+['’]s timeline\b|\b(?:op|aan) (?:het profiel|de tijdlijn) van\b/i;
 
 type MediaItem = { uri?: unknown; creation_timestamp?: unknown; description?: unknown };
-
-// Facebook writes UTF-8 text as Latin-1 escapes ("Letâ\u0080\u0099s"); this restores it.
-function fixEncoding<T>(value: T): T {
-  if (typeof value === 'string') {
-    if (!/[\u0080-ÿ]/.test(value) || /[^\u0000-ÿ]/.test(value)) return value;
-    const decoded = Buffer.from(value, 'latin1').toString('utf8');
-    return (decoded.includes('�') ? value : decoded) as T;
-  }
-  if (Array.isArray(value)) return value.map(fixEncoding) as T;
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, fixEncoding(item)])) as T;
-  }
-  return value;
-}
 
 function hashId(prefix: string, ...parts: unknown[]): string {
   return `${prefix}_${createHash('sha256').update(parts.map(String).join('\u0000')).digest('hex').slice(0, 24)}`;
@@ -109,7 +101,7 @@ export class FacebookAdapter extends BaseAdapter {
   }
 
   private readJson(entry: AdmZip.IZipEntry): any {
-    return fixEncoding(JSON.parse(entry.getData().toString('utf8')));
+    return fixMetaEncoding(JSON.parse(entry.getData().toString('utf8')));
   }
 
   private readLists(zipPath: string, pattern: RegExp): any[] {
@@ -129,6 +121,10 @@ export class FacebookAdapter extends BaseAdapter {
         zipPath,
         /(?:^|\/)your_facebook_activity\/posts\/your_posts__check_ins__photos_and_videos(?:_\d+)?\.json$/i
       );
+      const groupPostTimestamps = new Set(
+        this.readLists(zipPath, /(?:^|\/)your_facebook_activity\/groups\/group_posts_and_comments\.json$/i)
+          .map(groupPost => groupPost?.timestamp)
+      );
       for (const item of postRecords) {
         const createdAt = toDate(item.timestamp);
         if (!createdAt) continue;
@@ -142,10 +138,17 @@ export class FacebookAdapter extends BaseAdapter {
         const rawText = (Array.isArray(item.data) ? item.data : [])
           .map((data: any) => nonEmptyString(data?.post))
           .find(Boolean);
+        // Media of skipped posts is marked as seen so it does not return as standalone photos.
+        mediaUris.forEach((uri: string) => seenUris.add(uri));
+        const title = typeof item.title === 'string' ? item.title : '';
+        if (
+          groupPostTimestamps.has(item.timestamp) ||
+          GROUP_POST_TITLE.test(title) ||
+          OTHER_PROFILE_POST_TITLE.test(title)
+        ) continue;
         if (!rawText && !mediaUris.length && !link) continue;
 
         const { text, mentions } = parseMentions(rawText || '');
-        mediaUris.forEach((uri: string) => seenUris.add(uri));
         posts.push(this.createPost(
           hashId('fb', item.timestamp, mediaUris.join('\u0000'), rawText || link),
           createdAt,

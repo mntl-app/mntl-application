@@ -411,11 +411,19 @@ Get list of supported platforms.
 - Handles media files in `media/` folder, including ZIPs with a top-level export directory
 - Existing saved archives should be uploaded again to refresh their stored album media after upgrading
 - Extracts hashtags and mentions from captions
+- Imports stories from `your_instagram_activity/media/stories.json` as `story` posts with their media,
+  listed separately in the selection wizard. Highlights are not marked in the export, so highlighted
+  stories arrive as ordinary stories without their highlight name
+- Imports story likes and emoji story reactions; their ID is the story's media ID, so they match the
+  exact story once its owner uploads their archive
+- Repairs Meta's text encoding (UTF-8 stored as Latin-1 escapes) and reads localized caption labels
 
 ### Facebook
 - Detects archives by their `your_facebook_activity/` folder
 - Repairs Facebook's text encoding (UTF-8 stored as Latin-1 escapes) and reads English and Dutch labels
 - Imports posts, standalone photos, videos, and albums; skips trash, archived posts, stickers, and messages
+- Only imports posts made to the account's own profile feed: group posts (recognized by title or the export's
+  group posts file) and posts on other people's profiles or timelines are skipped, along with their media
 - Friends are both followers and following (friendship is mutual); followed profiles are following only
 - Relationship lists only contain display names, so Facebook claims match by display name
 - Reactions and comments record the content owner (from the URL, name label, or title), so activity is
@@ -426,7 +434,6 @@ Get list of supported platforms.
 - Strips JavaScript wrapper from `.js` files (e.g., `window.YTD.tweets.part0 = [...]`)
 - Imports tweets, follower/following account IDs, and liked tweet IDs from standard X archive files
 - Identifies replies by their exported parent post ID and presents them in a separately selectable list from posts and reels
-- Shows X follower/following handles only when a matching account archive is stored; unknown IDs stay saved but hidden
 - Maps photo tweets to regular posts, video tweets to reels, and text-only tweets to text posts
 - Serves photo and video files from the uploaded archive when present
 - Uses exported account IDs for followers and following, and tweet IDs for likes
@@ -440,6 +447,13 @@ Get list of supported platforms.
 - Also supports legacy `video_data.json` and `posts.csv` post exports
 - Handles video-specific metrics (views, shares)
 - Extracts hashtags and mentions from descriptions
+
+## Contacts on MNTL
+
+The follower, following, and friends steps only list contacts who are on MNTL: accounts that belong to an
+archive another MNTL user uploaded, matched the same way as relationship claims (ambiguous matches are left
+out). All other contacts stay saved and selected, and are only counted ("not joined MNTL yet"), so a
+connection can be made if they join later. "Select all" and "Clear all" only affect the listed contacts.
 
 ## Privacy
 

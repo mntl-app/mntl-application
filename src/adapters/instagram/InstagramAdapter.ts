@@ -4,7 +4,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { BaseAdapter } from '../BaseAdapter';
 import { ZipExtractor } from '../../etl/extract/ZipExtractor';
+import { fixMetaEncoding } from '../metaText';
 import { NormalizedPost, NormalizedUser, NormalizedFollowRelation, NormalizedLike, NormalizedComment, Platform } from '../../types/schemas';
+
+// Liked-post captions are labelled in the export's language.
+const CAPTION_LABELS = new Set(['Caption', 'Légende', 'Bijschrift', 'Leyenda', 'Didascalia', 'Beschriftung', 'Legenda']);
+const STORY_URL_PATTERN = /instagram\.com\/stories\/([^/?#]+)\/(\d+)/i;
 
 export class InstagramAdapter extends BaseAdapter {
   readonly platform: Platform = 'instagram';
@@ -50,7 +55,7 @@ export class InstagramAdapter extends BaseAdapter {
       );
       const postRecords = postFiles.flatMap(entry => {
         const content = entry.getData().toString('utf8');
-        const data = JSON.parse(content);
+        const data = fixMetaEncoding(JSON.parse(content));
         return Array.isArray(data) ? data : [];
       });
       const reelFiles = entries.filter(entry =>
@@ -59,7 +64,7 @@ export class InstagramAdapter extends BaseAdapter {
         !path.basename(entry.entryName).startsWith('._')
       );
       const reelRecords = reelFiles.flatMap(entry => {
-        const data = JSON.parse(entry.getData().toString('utf8'));
+        const data = fixMetaEncoding(JSON.parse(entry.getData().toString('utf8')));
         return Array.isArray(data)
           ? data
           : Array.isArray(data.ig_reels_media)
@@ -81,12 +86,47 @@ export class InstagramAdapter extends BaseAdapter {
         posts.push(...this.parsePostJSON(postRecords, 'post'));
       }
       posts.push(...this.parsePostJSON(reelRecords, 'reel'));
+      posts.push(...this.parseStories(entries));
       this.removeDuplicateMediaFiles(posts, entries);
     } catch (error) {
       console.error('Error extracting Instagram posts:', error);
     }
 
     return posts;
+  }
+
+  // Stories (including those saved to highlights, which the export does not mark).
+  private parseStories(entries: AdmZip.IZipEntry[]): NormalizedPost[] {
+    const storyFiles = entries.filter(entry =>
+      /your_instagram_activity\/media\/stories\.json$/i.test(entry.entryName.replace(/\\/g, '/')) &&
+      !entry.entryName.includes('/__MACOSX/') &&
+      !path.basename(entry.entryName).startsWith('._')
+    );
+    return storyFiles.flatMap(entry => {
+      const data = fixMetaEncoding(JSON.parse(entry.getData().toString('utf8')));
+      const stories = Array.isArray(data?.ig_stories) ? data.ig_stories : Array.isArray(data) ? data : [];
+      return stories.flatMap((story: any): NormalizedPost[] => {
+        const uri = typeof story?.uri === 'string' ? story.uri : '';
+        const timestamp = Number(story?.creation_timestamp);
+        if (!uri || !Number.isFinite(timestamp)) return [];
+        // The file name is the story's media ID, which is also the ID in other users' story likes.
+        const mediaId = path.basename(uri).replace(/\.[^.]+$/, '');
+        const caption = typeof story.title === 'string' && story.title.trim() ? story.title : undefined;
+        return [{
+          originalPlatformId: /^\d+$/.test(mediaId) ? mediaId : `ig_story_${createHash('sha256').update(uri).digest('hex').slice(0, 24)}`,
+          platform: this.platform,
+          postType: 'story',
+          content: caption,
+          mediaUrls: [uri],
+          mediaTypes: [story.media_metadata?.video_metadata || /\.(mp4|mov|webm)$/i.test(uri) ? 'video' : 'image'],
+          createdAt: new Date(timestamp * 1000),
+          metrics: { likesCount: 0, commentsCount: 0, sharesCount: 0, viewsCount: 0 },
+          hashtags: caption ? this.extractHashtags(caption) : undefined,
+          mentions: caption ? this.extractMentions(caption) : undefined,
+          isDeleted: false,
+        }];
+      });
+    });
   }
 
   private getPostCaption(item: any): string {
@@ -288,7 +328,7 @@ export class InstagramAdapter extends BaseAdapter {
 
       for (const entry of profileFiles) {
         const content = entry.getData().toString('utf8');
-        const data = JSON.parse(content);
+        const data = fixMetaEncoding(JSON.parse(content));
         const profile = Array.isArray(data.profile_user) ? data.profile_user[0] : undefined;
         const stringMap = profile?.string_map_data || {};
         const username = stringMap.Username?.value || data.profile_user_name || data.username;
@@ -330,7 +370,7 @@ export class InstagramAdapter extends BaseAdapter {
 
       for (const entry of followFiles) {
         const content = entry.getData().toString('utf8');
-        const data = JSON.parse(content);
+        const data = fixMetaEncoding(JSON.parse(content));
 
         const followList = Array.isArray(data) ? data : data.relationships_following || data.following || [];
         const items = Array.isArray(followList) ? followList : [];
@@ -357,7 +397,7 @@ export class InstagramAdapter extends BaseAdapter {
 
       for (const entry of followerFiles) {
         const content = entry.getData().toString('utf8');
-        const data = JSON.parse(content);
+        const data = fixMetaEncoding(JSON.parse(content));
 
         const followerList = Array.isArray(data) ? data : data.relationships_followers || data.followers || [];
         const items = Array.isArray(followerList) ? followerList : [];
@@ -395,7 +435,7 @@ export class InstagramAdapter extends BaseAdapter {
 
       for (const entry of likeFiles) {
         const content = entry.getData().toString('utf8');
-        const data = JSON.parse(content);
+        const data = fixMetaEncoding(JSON.parse(content));
 
         const items = Array.isArray(data) ? data : [];
 
@@ -410,7 +450,7 @@ export class InstagramAdapter extends BaseAdapter {
               } else if (labelValue.label === 'URL' && typeof labelValue.value === 'string') {
                 postUrl = labelValue.value;
               }
-              if (labelValue.label === 'Caption' && typeof labelValue.value === 'string' && !postText) {
+              if (CAPTION_LABELS.has(labelValue.label) && typeof labelValue.value === 'string' && !postText) {
                 postText = labelValue.value;
               }
             }
@@ -432,11 +472,45 @@ export class InstagramAdapter extends BaseAdapter {
           });
         }
       }
+
+      likes.push(...this.parseStoryReactions(entries));
     } catch (error) {
       console.error('Error extracting Instagram likes:', error);
     }
 
     return likes;
+  }
+
+  // Likes and emoji reactions on other accounts' stories. The fbid is the story's media
+  // ID, so a reaction matches the exact story when its owner uploads their archive.
+  private parseStoryReactions(entries: AdmZip.IZipEntry[]): NormalizedLike[] {
+    const reactionFiles = entries.filter(entry =>
+      /your_instagram_activity\/story_interactions\/(?:story_likes|emoji_story_reactions)\.json$/i
+        .test(entry.entryName.replace(/\\/g, '/')) &&
+      !entry.entryName.includes('/__MACOSX/') &&
+      !path.basename(entry.entryName).startsWith('._')
+    );
+    return reactionFiles.flatMap(entry => {
+      const data = fixMetaEncoding(JSON.parse(entry.getData().toString('utf8')));
+      const items = Array.isArray(data) ? data : [];
+      return items.flatMap((item: any): NormalizedLike[] => {
+        const urlLabel = Array.isArray(item?.label_values)
+          ? item.label_values.find((labelValue: any) => labelValue?.label === 'URL')
+          : undefined;
+        const postUrl = typeof urlLabel?.href === 'string' ? urlLabel.href : urlLabel?.value;
+        const storyMatch = typeof postUrl === 'string' ? postUrl.match(STORY_URL_PATTERN) : null;
+        const postId = item?.fbid ? String(item.fbid) : storyMatch?.[2];
+        if (!postId) return [];
+        return [{
+          userId: 'me',
+          postId,
+          platform: this.platform,
+          likedAt: typeof item.timestamp === 'number' ? new Date(item.timestamp * 1000) : undefined,
+          postUrl: postUrl || undefined,
+          postOwnerId: storyMatch?.[1],
+        }];
+      });
+    });
   }
 
   async extractComments(zipPath: string): Promise<NormalizedComment[]> {
@@ -454,7 +528,7 @@ export class InstagramAdapter extends BaseAdapter {
 
       for (const entry of commentFiles) {
         const content = entry.getData().toString('utf8');
-        const data = JSON.parse(content);
+        const data = fixMetaEncoding(JSON.parse(content));
 
         const commentList = Array.isArray(data) ? data : data.comments;
         const items = Array.isArray(commentList) ? commentList : [];

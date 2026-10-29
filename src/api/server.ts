@@ -308,11 +308,23 @@ app.get('/api/data/posts', async (req: Request, res: AuthenticatedResponse) => {
   try {
     const archive = await getRequestedArchive(req, res);
     if (res.headersSent) return;
-    const posts = archive?.posts.filter(post => !post.isReply) || [];
+    const posts = archive?.posts.filter(post => !post.isReply && post.postType !== 'story') || [];
     res.json({ posts, count: posts.length, selection: archive?.selection });
   } catch (error) {
     console.error('Error fetching posts:', error);
     res.status(500).json({ error: 'Failed to fetch posts' });
+  }
+});
+
+app.get('/api/data/stories', async (req: Request, res: AuthenticatedResponse) => {
+  try {
+    const archive = await getRequestedArchive(req, res);
+    if (res.headersSent) return;
+    const stories = archive?.posts.filter(post => post.postType === 'story') || [];
+    res.json({ stories, count: stories.length, selection: archive?.selection });
+  } catch (error) {
+    console.error('Error fetching stories:', error);
+    res.status(500).json({ error: 'Failed to fetch stories' });
   }
 });
 
@@ -328,33 +340,38 @@ app.get('/api/data/replies', async (req: Request, res: AuthenticatedResponse) =>
   }
 });
 
+// Only contacts who are on MNTL are listed. The rest stay saved (and selected) so a
+// connection can be made if they join later; hiddenCount tells the page how many.
 function followRelationsHandler(direction: 'followers' | 'following' | 'friends') {
   return async (req: Request, res: AuthenticatedResponse) => {
     try {
       const archive = await getRequestedArchive(req, res);
       if (res.headersSent) return;
-      const knownHandles = archive
-        ? await archiveStore.getKnownOwnerHandles(archive.platform)
-        : new Map<string, string>();
       const accountIds = archive?.[direction] || [];
-      // Friends are listed like accounts the owner follows, marked as friendships.
-      const allFollowRelations = archive
-        ? accountIds.map(accountId => ({
-            followerId: direction === 'followers' ? accountId : archive.ownerId,
-            followingId: direction === 'followers' ? archive.ownerId : accountId,
-            platform: archive.platform,
-            accountHandle: knownHandles.get(accountId),
-            ...(direction === 'friends' ? { relationship: 'friend' } : {}),
-          }))
+      const mntlAccounts = archive
+        ? await archiveStore.findMntlAccounts(archive.platform, accountIds, res.locals.user.userId)
+        : new Map();
+      const followRelations = archive
+        ? accountIds.flatMap(accountId => {
+            const mntlAccount = mntlAccounts.get(accountId);
+            if (!mntlAccount) return [];
+            return [{
+              followerId: direction === 'followers' ? accountId : archive.ownerId,
+              followingId: direction === 'followers' ? archive.ownerId : accountId,
+              platform: archive.platform,
+              accountHandle: mntlAccount.accountHandle,
+              mntlHandle: mntlAccount.mntlHandle,
+              ...(direction === 'friends' ? { relationship: 'friend' } : {}),
+            }];
+          })
         : [];
-      const followRelations = archive?.platform === 'x'
-        ? allFollowRelations.filter(relation => relation.accountHandle)
-        : allFollowRelations;
       res.json({
         followRelations,
         count: followRelations.length,
-        hiddenCount: allFollowRelations.length - followRelations.length,
-        selectionCatalog: { [direction]: accountIds },
+        hiddenCount: accountIds.length - followRelations.length,
+        selectionCatalog: { [direction]: followRelations.map(relation =>
+          direction === 'followers' ? relation.followerId : relation.followingId
+        ) },
         selection: archive?.selection,
       });
     } catch (error) {
@@ -400,7 +417,8 @@ app.get('/api/data/summary', async (req: Request, res: AuthenticatedResponse) =>
       platform: archive?.platform,
       ownerId: archive?.ownerId,
       ownerHandle: archive?.ownerHandle,
-      posts: archive?.posts.length || 0,
+      posts: archive?.posts.filter(post => post.postType !== 'story').length || 0,
+      stories: archive?.posts.filter(post => post.postType === 'story').length || 0,
       followers: archive?.followers.length || 0,
       following: archive?.following.length || 0,
       friends: archive?.friends?.length || 0,

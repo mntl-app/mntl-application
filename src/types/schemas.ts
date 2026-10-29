@@ -15,7 +15,7 @@ export type Metrics = z.infer<typeof MetricsSchema>;
 export const PostSchema = z.object({
   originalPlatformId: z.string(),
   platform: PlatformEnum,
-  postType: z.enum(['post', 'reel', 'text']).optional(),
+  postType: z.enum(['post', 'reel', 'text', 'story']).optional(),
   isReply: z.boolean().optional(),
   replyToPostId: z.string().optional(),
   content: z.string().optional(),
@@ -103,7 +103,7 @@ export const ActivitySchema = z.object({
   }),
   target: z.object({
     platformPostId: z.string(),
-    type: z.enum(['post', 'reel', 'text', 'reply', 'unknown']),
+    type: z.enum(['post', 'reel', 'text', 'story', 'reply', 'unknown']),
     text: z.string().optional(),
     url: z.string().optional(),
     mediaUrls: z.array(z.string()).optional(),

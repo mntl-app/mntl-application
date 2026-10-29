@@ -1921,3 +1921,127 @@ test('expires unconfirmed claims after a year and removes people who opted out',
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('imports Instagram stories and matches story likes to the exact story', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'instagram-stories-test-'));
+  const ownerArchive = join(directory, 'owner.zip');
+  const likerArchive = join(directory, 'liker.zip');
+  const owner = new AdmZip();
+  owner.addFile('export/your_instagram_activity/media/stories.json', facebookJson({ ig_stories: [
+    { uri: 'media/stories/202610/18219106489353268.mp4', creation_timestamp: 1792194236, title: 'Café vibes ☕', media_metadata: { video_metadata: {} } },
+    { uri: 'media/other/17900000000000001.jpg', creation_timestamp: 1792194300, title: '' },
+  ] }));
+  owner.addFile('export/media/stories/202610/18219106489353268.mp4', Buffer.from('video'));
+  owner.writeZip(ownerArchive);
+  const liker = new AdmZip();
+  liker.addFile('your_instagram_activity/story_interactions/story_likes.json', facebookJson([{
+    timestamp: 1792308648,
+    label_values: [
+      { label: 'URL', value: 'https://www.instagram.com/stories/renogoelen/4009538356920512950', href: 'https://www.instagram.com/stories/renogoelen/4009538356920512950' },
+      { label: 'Propriétaire', dict: [] },
+    ],
+    fbid: '18219106489353268',
+  }]));
+  liker.addFile('your_instagram_activity/story_interactions/emoji_story_reactions.json', facebookJson([{
+    timestamp: 1792308700,
+    label_values: [{ label: 'URL', href: 'https://www.instagram.com/stories/someone_else/123' }],
+    fbid: '17000000000000009',
+  }]));
+  liker.writeZip(likerArchive);
+
+  const store = new ArchiveStore(join(directory, 'archives'));
+  try {
+    const adapter = new InstagramAdapter();
+    const stories = await adapter.extractPosts(ownerArchive);
+    assert.deepEqual(stories.map(story => [story.originalPlatformId, story.postType, story.content, story.mediaTypes]), [
+      ['18219106489353268', 'story', 'Café vibes ☕', ['video']],
+      ['17900000000000001', 'story', undefined, ['image']],
+    ]);
+
+    const likes = await adapter.extractLikes(likerArchive);
+    assert.deepEqual(likes.map(like => [like.postId, like.postOwnerId]).sort(), [
+      ['17000000000000009', 'someone_else'],
+      ['18219106489353268', 'renogoelen'],
+    ]);
+
+    const base = { platform: 'instagram' as const, followers: [], following: [], importedAt: '2026-10-20T00:00:00.000Z' };
+    await store.save({ ...base, archiveId: 'reno-ig', ownerId: 'renogoelen', mntlUserId: 'reno-id', mntlHandle: 'mntl_reno', posts: stories, likes: [] });
+    await store.save({
+      ...base, archiveId: 'sofie-ig', ownerId: 'sofieyoume', mntlUserId: 'sofie-id', mntlHandle: 'mntl_sofie', posts: [],
+      likes: likes.map(like => minimizeLike({ ...like, userId: 'sofieyoume' })),
+    });
+    const activities = await store.getMntlActivities('sofie-id');
+    const storyLike = activities.find(activity => activity.target.platformPostId === '18219106489353268')!;
+    const otherLike = activities.find(activity => activity.target.platformPostId === '17000000000000009')!;
+    assert.deepEqual([storyLike.target.type, storyLike.target.ownerHandle, storyLike.target.text], ['story', 'mntl_reno', 'Café vibes ☕']);
+    assert.equal(otherLike.target.ownerHandle, undefined);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('finds which contacts are MNTL users without exposing the others', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'mntl-accounts-test-'));
+  const store = new ArchiveStore(directory);
+  const archive = (archiveId: string, platform: StoredArchive['platform'], ownerId: string, mntlUserId: string, extra: Partial<StoredArchive> = {}): StoredArchive => ({
+    archiveId, platform, ownerId, mntlUserId, mntlHandle: `mntl_${mntlUserId}`, importedAt: '2026-01-01T00:00:00.000Z',
+    followers: [], following: [], posts: [], likes: [], ...extra,
+  });
+  try {
+    await store.save(archive('me-ig', 'instagram', 'me_ig', 'me'));
+    await store.save(archive('bob-ig', 'instagram', 'bob_ig', 'bob'));
+    await store.save(archive('bob-x', 'x', '2002', 'bob', { ownerHandle: 'bob_on_x' }));
+    await store.save(archive('carol-fb', 'facebook', 'carol.c', 'carol', { ownerName: 'Carol Chen' }));
+    await store.save(archive('dup1-ig', 'instagram', 'shared_name', 'dup1'));
+    await store.save(archive('dup2-ig', 'instagram', 'shared_name', 'dup2'));
+
+    const instagram = await store.findMntlAccounts('instagram', ['@BOB_IG', 'stranger', 'me_ig', 'shared_name'], 'me');
+    assert.deepEqual([...instagram.entries()], [['@BOB_IG', { mntlUserId: 'bob', mntlHandle: 'mntl_bob', accountHandle: undefined }]]);
+
+    const x = await store.findMntlAccounts('x', ['2002', '3003']);
+    assert.deepEqual([...x.keys()], ['2002']);
+    assert.equal(x.get('2002')?.accountHandle, 'bob_on_x');
+
+    const facebook = await store.findMntlAccounts('facebook', ['carol  chen', 'Someone Else']);
+    assert.deepEqual([...facebook.keys()], ['carol  chen']);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('imports only Facebook posts made to the profile feed', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'facebook-feed-test-'));
+  const archivePath = join(directory, 'archive.zip');
+  const zip = new AdmZip();
+  const post = (timestamp: number, title: string, text: string, uri?: string) => ({
+    timestamp,
+    title,
+    data: [{ post: text }],
+    attachments: uri ? [{ data: [{ media: { uri } }] }] : [],
+  });
+  zip.addFile('your_facebook_activity/posts/your_posts__check_ins__photos_and_videos_1.json', facebookJson([
+    post(1700000001, 'Sofie heeft een bericht gedeeld.', 'On my own feed'),
+    post(1700000002, 'Sofie heeft een bericht gedeeld met de groep Reizen in Gambia.', 'Dutch group post'),
+    post(1700000003, 'Reno Goelen posted in Fiat Tipo Club Belgium.', 'English group post'),
+    post(1700000004, 'Sofie heeft een bericht gedeeld.', 'Group post with a generic title', 'your_facebook_activity/posts/media/your_posts/55.jpg'),
+    post(1700000005, 'Sofie heeft op het profiel van Rita geschreven.', 'Happy birthday!'),
+    post(1700000006, "Reno Goelen wrote on Jane Doe's timeline.", 'Hi Jane'),
+    post(1700000007, 'Sofie heeft een nieuwe foto toegevoegd aan de tijdlijn van Tom.', 'Photo for Tom'),
+    post(1700000008, "Reno Goelen added a new photo to Jane Doe's timeline.", 'Photo for Jane'),
+    post(1700000009, 'Sofie heeft een nieuwe foto toegevoegd.', 'Photo on my own feed'),
+  ]));
+  zip.addFile('your_facebook_activity/groups/group_posts_and_comments.json', facebookJson({ group_posts_v2: [
+    { timestamp: 1700000004, data: [{ post: 'Group post with a generic title' }], title: 'Sofie posted in Some Group.' },
+  ] }));
+  zip.addFile('your_facebook_activity/posts/your_uncategorized_photos.json', facebookJson({ other_photos_v2: [
+    { uri: 'your_facebook_activity/posts/media/your_posts/55.jpg', creation_timestamp: 1700000004 },
+  ] }));
+  zip.writeZip(archivePath);
+
+  try {
+    const posts = await new FacebookAdapter().extractPosts(archivePath);
+    assert.deepEqual(posts.map(item => item.content), ['On my own feed', 'Photo on my own feed']);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

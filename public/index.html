@@ -1003,6 +1003,15 @@
                     </div>
                     <div class="data-list" id="repliesList"></div>
                 </div>
+                <div id="storiesSection" hidden>
+                    <h3>Stories</h3>
+                    <p class="subtitle">Stories you shared, including any saved to highlights (the export does not say which). All stories are included by default.</p>
+                    <div class="selection-toolbar">
+                        <button class="selection-action" data-select-kind="stories" data-select-all="true">Select all stories</button>
+                        <button class="selection-action" data-select-kind="stories" data-select-all="false">Clear all stories</button>
+                    </div>
+                    <div class="data-list" id="storiesList"></div>
+                </div>
                 <div class="wizard-navigation">
                     <button class="btn" data-wizard-next="followers">Next: followers</button>
                 </div>
@@ -1073,16 +1082,22 @@
                 <div class="summary-tabs">
                     <button class="summary-tab active" data-summary-tab="selectedPosts">Selected posts</button>
                     <button class="summary-tab" data-summary-tab="selectedReplies">Selected replies</button>
+                    <button class="summary-tab" data-summary-tab="selectedStories">Selected stories</button>
                     <button class="summary-tab" data-summary-tab="selectedFollowers">Selected followers</button>
-                    <button class="summary-tab" data-summary-tab="selectedFriends" hidden>Selected friends</button>
+                    <button class="summary-tab" data-summary-tab="selectedFriends">Selected friends</button>
                     <button class="summary-tab" data-summary-tab="selectedFollowing">Selected following</button>
                     <button class="summary-tab" data-summary-tab="matchesOnMntl">Matches on MNTL</button>
                     <button class="summary-tab" data-summary-tab="likes">Likes</button>
                     <button class="summary-tab" data-summary-tab="comments">Comments</button>
                 </div>
+                <div class="no-data" id="summaryEmpty" hidden>Nothing is selected or matched yet.</div>
                 <section class="summary-panel" id="selectedPosts">
                     <h3>Posts selected for migration</h3>
                     <div class="data-list" id="selectedPostsList"></div>
+                </section>
+                <section class="summary-panel" id="selectedStories" hidden>
+                    <h3>Stories selected for migration</h3>
+                    <div class="data-list" id="selectedStoriesList"></div>
                 </section>
                 <section class="summary-panel" id="selectedReplies" hidden>
                     <h3>Replies selected for migration</h3>
@@ -1169,7 +1184,7 @@
         let currentProfile = null;
         let progressInterval = null;
         let currentSelection = null;
-        let selectionCatalog = { posts: [], replies: [], followers: [], following: [], friends: [] };
+        let selectionCatalog = { posts: [], replies: [], stories: [], followers: [], following: [], friends: [] };
         let selectionSavePromise = Promise.resolve();
         const uploadedPlatformStorageKey = 'mntl-migration-uploaded-platforms';
         let uploadedPlatforms = new Set();
@@ -1334,7 +1349,7 @@
                 sessionStorage.setItem(getUploadedPlatformStorageKey(), JSON.stringify([...uploadedPlatforms]));
                 renderAvailablePlatforms();
                 currentSelection = null;
-                selectionCatalog = { posts: [], replies: [], followers: [], following: [], friends: [] };
+                selectionCatalog = { posts: [], replies: [], stories: [], followers: [], following: [], friends: [] };
                 Object.keys(loadedTabData).forEach(tab => delete loadedTabData[tab]);
                 selectionSavePromise = Promise.resolve();
                 platformValue.textContent = data.platform;
@@ -1389,7 +1404,7 @@
                             uploadBtn.hidden = true;
                             document.getElementById('resultsSection').classList.add('show');
                             currentSelection = null;
-                            selectionCatalog = { posts: [], replies: [], followers: [], following: [], friends: [] };
+                            selectionCatalog = { posts: [], replies: [], stories: [], followers: [], following: [], friends: [] };
                             Object.keys(loadedTabData).forEach(tab => delete loadedTabData[tab]);
                             selectionSavePromise = Promise.resolve();
                             goToWizardStep('postsStep').catch(error => showError(error.message));
@@ -1510,7 +1525,10 @@
             const tab = wizardDataTabs[stepId];
             if (tab) {
                 await loadTabData(tab);
-                if (tab === 'posts') await loadTabData('replies');
+                if (tab === 'posts') {
+                    await loadTabData('replies');
+                    await loadTabData('stories');
+                }
             }
             document.getElementById('resultsSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
@@ -1592,15 +1610,10 @@
                 if (!confirmResponse.ok) {
                     throw new Error((await confirmResponse.json()).error || 'Failed to confirm migration');
                 }
-                const response = await apiFetch(`/api/data/summary?archiveId=${encodeURIComponent(currentArchiveId)}`);
-                const archiveSummary = await response.json();
-                if (!response.ok) throw new Error(archiveSummary.error || 'Failed to confirm migration');
-
-                const ownerName = archiveSummary.ownerHandle
-                    ? `, @${archiveSummary.ownerHandle}`
-                    : '';
-                document.getElementById('completionGreeting').textContent =
-                    `Migration successfully completed${ownerName}!`;
+                // Greet with the MNTL handle, not the handle of the platform just imported.
+                document.getElementById('completionGreeting').textContent = currentProfile?.handle
+                    ? `Migration successfully completed, @${currentProfile.handle}!`
+                    : 'Migration successfully completed!';
                 renderAvailablePlatforms();
                 await goToWizardStep('completeStep');
             } catch (error) {
@@ -1619,14 +1632,29 @@
                 'Your confirmed selection is saved. You can close this page.';
         });
 
-        document.querySelectorAll('[data-summary-tab]').forEach(button => {
-            button.addEventListener('click', () => {
-                document.querySelectorAll('.summary-tab').forEach(tab => tab.classList.remove('active'));
-                document.querySelectorAll('.summary-panel').forEach(panel => {
-                    panel.hidden = panel.id !== button.dataset.summaryTab;
-                });
-                button.classList.add('active');
+        function selectSummaryTab(panelId) {
+            document.querySelectorAll('[data-summary-tab]').forEach(tab => {
+                tab.classList.toggle('active', tab.dataset.summaryTab === panelId);
             });
+            document.querySelectorAll('.summary-panel').forEach(panel => {
+                panel.hidden = panel.id !== panelId;
+            });
+        }
+
+        // Only tabs with something in them are shown; the active tab moves to the
+        // first visible one when its own tab becomes empty.
+        function showSummaryTabs(itemCounts) {
+            const tabs = [...document.querySelectorAll('[data-summary-tab]')];
+            tabs.forEach(tab => { tab.hidden = !itemCounts[tab.dataset.summaryTab]; });
+            const visibleTabs = tabs.filter(tab => !tab.hidden);
+            document.querySelector('.summary-tabs').hidden = visibleTabs.length === 0;
+            document.getElementById('summaryEmpty').hidden = visibleTabs.length > 0;
+            const activeTab = visibleTabs.find(tab => tab.classList.contains('active')) || visibleTabs[0];
+            selectSummaryTab(activeTab?.dataset.summaryTab);
+        }
+
+        document.querySelectorAll('[data-summary-tab]').forEach(button => {
+            button.addEventListener('click', () => selectSummaryTab(button.dataset.summaryTab));
         });
 
         async function loadTabData(tab) {
@@ -1658,6 +1686,9 @@
 
             if (tab === 'posts') {
                 selectionCatalog.posts = data.posts.map(post => post.originalPlatformId);
+            } else if (tab === 'stories') {
+                selectionCatalog.stories = data.stories.map(story => story.originalPlatformId);
+                document.getElementById('storiesSection').hidden = data.count === 0;
             } else if (tab === 'replies') {
                 selectionCatalog.replies = data.replies.map(post => post.originalPlatformId);
                 document.getElementById('repliesSection').hidden = data.count === 0;
@@ -1669,7 +1700,7 @@
 
             if (data.count === 0) {
                 listElement.innerHTML = data.hiddenCount > 0
-                    ? '<div class="no-data">No matching accounts with known X handles yet. Unmatched accounts are saved for future matching.</div>'
+                    ? `<div class="no-data">${NO_MNTL_CONTACTS}</div>`
                     : '<div class="no-data">No data available</div>';
                 return;
             }
@@ -1677,13 +1708,11 @@
             const items = tab === 'followers' || tab === 'following' || tab === 'friends' ? data.followRelations :
                           tab === 'posts' ? data.posts :
                           tab === 'replies' ? data.replies :
+                          tab === 'stories' ? data.stories :
                           data.likes;
 
             listElement.innerHTML = items.map(item => renderItem(tab, item)).join('');
-            if (data.hiddenCount > 0) {
-                listElement.insertAdjacentHTML('beforeend',
-                    '<div class="no-data">Other X accounts are hidden until an archive with a matching handle is uploaded.</div>');
-            }
+            listElement.insertAdjacentHTML('beforeend', savedContactsNote(data.hiddenCount));
             filterSelectionRows(tab);
         }
 
@@ -1691,6 +1720,7 @@
             switch (tab) {
                 case 'posts':
                 case 'replies':
+                case 'stories':
                     return renderSelectionRow(tab, item.originalPlatformId, item.content || '', `
                         <div class="data-item">
                             <div class="data-item-header">
@@ -1707,39 +1737,37 @@
                         </div>
                     `);
                 case 'followers':
-                    if (item.platform === 'x' && !item.accountHandle) return '';
-                    return renderSelectionRow('followers', item.followerId, item.accountHandle || item.followerId, `
+                    return renderSelectionRow('followers', item.followerId, `${item.accountHandle || item.followerId} ${item.mntlHandle}`, `
                         <div class="data-item">
                             <div class="data-item-header">
                                 <span class="data-item-platform">${escapeHtml(item.platform)}</span>
                                 <span class="data-item-date">${item.followedAt ? new Date(item.followedAt).toLocaleDateString() : 'Unknown date'}</span>
                             </div>
                             <div class="data-item-content">
-                                <strong>${item.platform === 'x' ? `@${escapeHtml(item.accountHandle)}` : escapeHtml(item.followerId)}</strong> follows you
+                                ${renderContact(item, item.followerId)} follows you
                             </div>
                         </div>
                     `);
                 case 'friends':
-                    return renderSelectionRow('friends', item.followingId, item.followingId, `
+                    return renderSelectionRow('friends', item.followingId, `${item.followingId} ${item.mntlHandle}`, `
                         <div class="data-item">
                             <div class="data-item-header">
                                 <span class="data-item-platform">${escapeHtml(item.platform)}</span>
                             </div>
                             <div class="data-item-content">
-                                You are friends with <strong>${escapeHtml(item.followingId)}</strong>
+                                You are friends with ${renderContact(item, item.followingId)}
                             </div>
                         </div>
                     `);
                 case 'following':
-                    if (item.platform === 'x' && !item.accountHandle) return '';
-                    return renderSelectionRow('following', item.followingId, item.accountHandle || item.followingId, `
+                    return renderSelectionRow('following', item.followingId, `${item.accountHandle || item.followingId} ${item.mntlHandle}`, `
                         <div class="data-item">
                             <div class="data-item-header">
                                 <span class="data-item-platform">${escapeHtml(item.platform)}</span>
                                 <span class="data-item-date">${item.followedAt ? new Date(item.followedAt).toLocaleDateString() : 'Unknown date'}</span>
                             </div>
                             <div class="data-item-content">
-                                You follow <strong>${item.platform === 'x' ? `@${escapeHtml(item.accountHandle)}` : escapeHtml(item.followingId)}</strong>
+                                You follow ${renderContact(item, item.followingId)}
                             </div>
                         </div>
                     `);
@@ -1767,7 +1795,23 @@
         }
 
         function selectionKey(kind) {
-            return kind === 'posts' || kind === 'replies' ? 'postIds' : kind;
+            return kind === 'posts' || kind === 'replies' || kind === 'stories' ? 'postIds' : kind;
+        }
+
+        // Contacts are only listed once they are on MNTL; the rest stay saved for later.
+        const NO_MNTL_CONTACTS = 'None of your contacts have joined MNTL yet. They are saved, so you can connect when they join.';
+
+        function savedContactsNote(count) {
+            return count > 0
+                ? `<div class="no-data">${count} other contact${count === 1 ? ' has' : 's have'} not joined MNTL yet. They are saved, so you can connect when they join.</div>`
+                : '';
+        }
+
+        function renderContact(relation, accountId) {
+            const account = relation.platform === 'facebook'
+                ? accountId
+                : `@${relation.accountHandle || accountId}`;
+            return `<strong>${escapeHtml(account)}</strong> (@${escapeHtml(relation.mntlHandle)} on MNTL)`;
         }
 
         function renderSelectionRow(kind, value, searchableText, content) {
@@ -1823,7 +1867,7 @@
                 const kind = button.dataset.selectKind;
                 const key = selectionKey(kind);
                 if (!currentSelection || !loadedTabData[kind]) return;
-                if (kind === 'posts' || kind === 'replies') {
+                if (kind === 'posts' || kind === 'replies' || kind === 'stories') {
                     const selectedIds = new Set(currentSelection.postIds);
                     selectionCatalog[kind].forEach(id => {
                         if (button.dataset.selectAll === 'true') selectedIds.add(id);
@@ -1831,9 +1875,11 @@
                     });
                     currentSelection.postIds = [...selectedIds];
                 } else {
+                    const listed = new Set(selectionCatalog[kind]);
+                    const saved = currentSelection[key].filter(accountId => !listed.has(accountId));
                     currentSelection[key] = button.dataset.selectAll === 'true'
-                        ? [...selectionCatalog[kind]]
-                        : [];
+                        ? [...saved, ...listed]
+                        : saved;
                 }
                 renderTabData(kind, loadedTabData[kind]);
                 queueSelectionSave();
@@ -1867,7 +1913,7 @@
         function renderPostTypeBadge(post) {
             const postType = post.postType ||
                 (post.mediaTypes?.includes('video') ? 'reel' : post.mediaUrls?.length ? 'post' : 'text');
-            const label = postType === 'reel' ? 'Reel' : postType === 'text' ? 'Text post' : 'Post';
+            const label = postType === 'reel' ? 'Reel' : postType === 'text' ? 'Text post' : postType === 'story' ? 'Story' : 'Post';
             return `<span class="data-item-platform">${label}</span>`;
         }
 
@@ -1902,6 +1948,22 @@
             const selectedReplies = (loadedTabData.replies?.replies || []).filter(reply =>
                 currentSelection.postIds.includes(reply.originalPlatformId)
             );
+            const selectedStories = (loadedTabData.stories?.stories || []).filter(story =>
+                currentSelection.postIds.includes(story.originalPlatformId)
+            );
+            document.getElementById('selectedStoriesList').innerHTML = selectedStories.length
+                ? selectedStories.map(story => `
+                    <article class="data-item">
+                        <div class="data-item-header">
+                            <span class="data-item-platform">${escapeHtml(story.platform)}</span>
+                            ${renderPostTypeBadge(story)}
+                            <span class="data-item-date">${new Date(story.createdAt).toLocaleDateString()}</span>
+                        </div>
+                        ${story.content ? `<div class="data-item-content">${escapeHtml(story.content)}</div>` : ''}
+                        ${renderPostMedia(story)}
+                    </article>
+                `).join('')
+                : '<div class="no-data">No stories selected for migration.</div>';
             const selectedFollowers = (loadedTabData.followers?.followRelations || []).filter(relation =>
                 currentSelection.followers.includes(relation.followerId)
             );
@@ -1910,27 +1972,25 @@
             );
             const selectedReels = selectedPosts.filter(post => post.postType === 'reel').length;
             const selectedTextPosts = selectedPosts.filter(post => post.postType === 'text').length;
-            const hiddenSelectedFollowers = archiveSummary.platform === 'x'
-                ? currentSelection.followers.length - selectedFollowers.length
-                : 0;
-            const hiddenSelectedFollowing = archiveSummary.platform === 'x'
-                ? currentSelection.following.length - selectedFollowing.length
-                : 0;
+            const hiddenSelectedFollowers = currentSelection.followers.length - selectedFollowers.length;
+            const hiddenSelectedFollowing = currentSelection.following.length - selectedFollowing.length;
             const isFacebook = archiveSummary.platform === 'facebook';
-            const selectedFriends = currentSelection.friends || [];
-            document.querySelector('[data-summary-tab="selectedFollowers"]').hidden = isFacebook;
-            document.querySelector('[data-summary-tab="selectedFriends"]').hidden = !isFacebook;
-            document.getElementById('selectedFriendsList').innerHTML = selectedFriends.length
-                ? selectedFriends.map(name => `
-                    <div class="data-item"><div class="data-item-content">You are friends with <strong>${escapeHtml(name)}</strong></div></div>
-                `).join('')
-                : '<div class="no-data">No friends selected.</div>';
+            const selectedFriends = (loadedTabData.friends?.followRelations || []).filter(relation =>
+                (currentSelection.friends || []).includes(relation.followingId)
+            );
+            const hiddenSelectedFriends = (currentSelection.friends || []).length - selectedFriends.length;
+            document.getElementById('selectedFriendsList').innerHTML = renderContactSummary(
+                selectedFriends.map(relation => `You are friends with ${renderContact(relation, relation.followingId)}`),
+                hiddenSelectedFriends,
+                'No friends selected.'
+            );
 
             document.getElementById('selectionCounts').innerHTML = [
                 ['Selected posts', selectedPosts.length],
                 ['Including reels', selectedReels],
                 ['Text-only posts', selectedTextPosts],
                 ['Selected replies', selectedReplies.length],
+                ['Selected stories', selectedStories.length],
                 isFacebook ? ['Selected friends', selectedFriends.length] : ['Selected followers', selectedFollowers.length],
                 ['Selected following', selectedFollowing.length],
                 ['Matches on MNTL', mntlConnections.length],
@@ -1971,46 +2031,51 @@
                 `).join('')
                 : '<div class="no-data">No replies selected for migration.</div>';
 
-            document.getElementById('selectedFollowersList').innerHTML = selectedFollowers.length
-                ? selectedFollowers.map(relation => `
-                    <article class="data-item">
-                        <div class="data-item-content"><strong>${escapeHtml(relation.platform === 'x' ? `@${relation.accountHandle}` : relation.followerId)}</strong> follows you</div>
-                    </article>
-                `).join('') + (hiddenSelectedFollowers
-                    ? `<div class="no-data">${hiddenSelectedFollowers} unmatched X follower ID(s) are saved but hidden until an account archive identifies their handle.</div>`
-                    : '')
-                : `<div class="no-data">${hiddenSelectedFollowers
-                    ? `${hiddenSelectedFollowers} selected X follower ID(s) have no known handle yet, so they are hidden from this summary.`
-                    : 'No followers selected for migration.'}</div>`;
-
-            document.getElementById('selectedFollowingList').innerHTML = selectedFollowing.length
-                ? selectedFollowing.map(relation => `
-                    <article class="data-item">
-                        <div class="data-item-content">You follow <strong>${escapeHtml(relation.platform === 'x' ? `@${relation.accountHandle}` : relation.followingId)}</strong></div>
-                    </article>
-                `).join('') + (hiddenSelectedFollowing
-                    ? `<div class="no-data">${hiddenSelectedFollowing} unmatched X following ID(s) are saved but hidden until an account archive identifies their handle.</div>`
-                    : '')
-                : `<div class="no-data">${hiddenSelectedFollowing
-                    ? `${hiddenSelectedFollowing} selected X following ID(s) have no known handle yet, so they are hidden from this summary.`
-                    : 'No accounts selected to follow.'}</div>`;
+            document.getElementById('selectedFollowersList').innerHTML = renderContactSummary(
+                selectedFollowers.map(relation => `${renderContact(relation, relation.followerId)} follows you`),
+                hiddenSelectedFollowers,
+                'No followers selected for migration.'
+            );
+            document.getElementById('selectedFollowingList').innerHTML = renderContactSummary(
+                selectedFollowing.map(relation => `You follow ${renderContact(relation, relation.followingId)}`),
+                hiddenSelectedFollowing,
+                'No accounts selected to follow.'
+            );
 
             const discoveredConnections = mntlConnections.length
                 ? mntlConnections.map(renderMntlConnection).join('')
                 : '<div class="no-data">No MNTL connections found yet.</div>';
             document.getElementById('matchesOnMntlList').innerHTML = discoveredConnections;
-            document.getElementById('likesList').innerHTML = renderActivityList(
-                activities.filter(activity =>
-                    activity.type === 'like' && activity.target.ownerMntlUserId
-                ),
-                'like'
+            const matchedLikes = activities.filter(activity =>
+                activity.type === 'like' && activity.target.ownerMntlUserId
             );
-            document.getElementById('commentsList').innerHTML = renderActivityList(
-                activities.filter(activity =>
-                    activity.type === 'comment' && activity.target.ownerMntlUserId
-                ),
-                'comment'
+            const matchedComments = activities.filter(activity =>
+                activity.type === 'comment' && activity.target.ownerMntlUserId
             );
+            document.getElementById('likesList').innerHTML = renderActivityList(matchedLikes, 'like');
+            document.getElementById('commentsList').innerHTML = renderActivityList(matchedComments, 'comment');
+
+            showSummaryTabs({
+                selectedPosts: selectedPosts.length,
+                selectedReplies: selectedReplies.length,
+                selectedStories: selectedStories.length,
+                // Contacts not on MNTL yet are summarized in a note, so they still count.
+                selectedFollowers: isFacebook ? 0 : selectedFollowers.length + hiddenSelectedFollowers,
+                selectedFriends: isFacebook ? selectedFriends.length + hiddenSelectedFriends : 0,
+                selectedFollowing: selectedFollowing.length + hiddenSelectedFollowing,
+                matchesOnMntl: mntlConnections.length,
+                likes: matchedLikes.length,
+                comments: matchedComments.length,
+            });
+        }
+
+        function renderContactSummary(rows, savedCount, emptyText) {
+            if (!rows.length) {
+                return `<div class="no-data">${savedCount > 0 ? NO_MNTL_CONTACTS : emptyText}</div>`;
+            }
+            return rows.map(row => `
+                <article class="data-item"><div class="data-item-content">${row}</div></article>
+            `).join('') + savedContactsNote(savedCount);
         }
 
         function renderActivityList(activities, type) {
